@@ -248,7 +248,8 @@ class ImageRenderEngine : AutoCloseable {
         val available = runtime.maxMemory() - runtime.totalMemory() + runtime.freeMemory()
         val reserve = 24L * 1024 * 1024
         check(outputBytes <= Int.MAX_VALUE && outputBytes + tileBytes + reserve < available) {
-            "设备可用内存不足，无法${action} ${width} × ${height} 原尺寸图片；编辑内容已保留，请缩小裁剪范围后重试"
+            val retry = if (action == "导出") "请选择较小导出尺寸或缩小裁剪范围后重试" else "请缩小裁剪范围后重试"
+            "设备可用内存不足，无法${action} ${width} × ${height} 图片；编辑内容已保留，$retry"
         }
     }
 

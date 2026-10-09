@@ -35,6 +35,12 @@ data class EditorUiState(
     val savedUri: Uri? = null,
     val activeTool: EditorTool? = null,
     val exportFormat: ExportFormat = ExportFormat.JPEG,
+    val exportOptions: ExportOptions = ExportOptions(),
+    val savedSize: ImageSize? = null,
+    val presets: List<ColorPreset> = emptyList(),
+    val hasCopiedGrade: Boolean = false,
+    val isPresetBusy: Boolean = false,
+    val notice: String? = null,
 )
 
 interface EditorActions {
@@ -49,6 +55,14 @@ interface EditorActions {
     fun redo()
     fun resetAll()
     fun export(format: ExportFormat)
+    fun export(options: ExportOptions)
+    fun savePreset(name: String)
+    fun renamePreset(id: String, name: String)
+    fun deletePreset(id: String)
+    fun applyPreset(id: String)
+    fun copyColorGrade()
+    fun pasteColorGrade()
+    fun dismissNotice()
     fun dismissError()
     fun dismissSaved()
     fun shareSaved()

@@ -10,6 +10,7 @@ import com.kang.imageeditapp.data.Draft
 import com.kang.imageeditapp.data.DraftRepository
 import com.kang.imageeditapp.data.ExportRepository
 import com.kang.imageeditapp.data.PhotoRepository
+import com.kang.imageeditapp.data.PresetRepository
 import com.kang.imageeditapp.data.UnsupportedDraftVersionException
 import com.kang.imageeditapp.model.*
 import com.kang.imageeditapp.render.ImageRenderEngine
@@ -28,6 +29,8 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     private val photoRepository = PhotoRepository(application)
     private val draftRepository = DraftRepository(application)
     private val exportRepository = ExportRepository(application)
+    private val presetRepository = PresetRepository(application)
+    private var copiedGrade: ColorGrade? = null
     private val executor = Executors.newSingleThreadExecutor { task -> Thread(task, "ImageEdit-GL") }
     private val renderDispatcher = executor.asCoroutineDispatcher()
     private val engineDelegate = lazy { ImageRenderEngine() }
@@ -50,6 +53,13 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     private var latestCommitted: DraftSave? = null
 
     init {
+        viewModelScope.launch {
+            mutableState.value = mutableState.value.copy(isPresetBusy = true)
+            try { publishLibrary(presetRepository.load()) }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Throwable) { mutableState.value = mutableState.value.copy(error = "无法读取个人预设：${describe(failure)}") }
+            finally { mutableState.value = mutableState.value.copy(isPresetBusy = false) }
+        }
         viewModelScope.launch {
             try {
                 draftMutex.withLock {
@@ -163,7 +173,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
                     ++draftEpoch
                     latestCommitted = DraftSave(draftEpoch, source, EditRecipe())
                     resetSession()
-                    mutableState.value = EditorUiState(source = source, draft = draft)
+                    mutableState.value = newSession(source = source, draft = draft)
                     listOfNotNull(previous, previousDraft?.source).distinctBy { it.localPath }
                         .filter { it.localPath != source.localPath }.forEach(::discardAfterRender)
                     requestRender()
@@ -201,7 +211,7 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
                     } else {
                         resetSession()
                         latestCommitted = DraftSave(draftEpoch, draft.source, draft.recipe)
-                        mutableState.value = EditorUiState(source = draft.source, recipe = draft.recipe, draft = draft)
+                        mutableState.value = newSession(source = draft.source, recipe = draft.recipe, draft = draft)
                         requestRender()
                     }
                 }
@@ -309,18 +319,84 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         else detailRequests.trySend(detailGeneration)
     }
 
-    fun export(format: ExportFormat) {
+    fun savePreset(name: String) {
+        val current = mutableState.value
+        if (!canUseGrade(current)) return
+        val grade = ColorGrade.capture(current.recipe)
+        mutateLibrary("预设已保存") { presetRepository.savePreset(name, grade) }
+    }
+
+    fun renamePreset(id: String, name: String) { mutateLibrary("预设已重命名") { presetRepository.renamePreset(id, name) } }
+    fun deletePreset(id: String) { mutateLibrary("预设已删除") { presetRepository.deletePreset(id) } }
+
+    fun applyPreset(id: String) {
+        val current = mutableState.value
+        if (!canUseGrade(current)) return
+        val preset = current.presets.firstOrNull { it.id == id } ?: return
+        endGesture()
+        updateRecipe(preset.grade.applyTo(current.recipe))
+        mutableState.value = mutableState.value.copy(notice = "已套用「${preset.name}」")
+    }
+
+    fun copyColorGrade() {
+        val current = mutableState.value
+        if (!canUseGrade(current)) return
+        val grade = ColorGrade.capture(current.recipe)
+        mutateLibrary("调色参数已复制，可用于其他照片") { presetRepository.copyGrade(grade) }
+    }
+
+    fun pasteColorGrade() {
+        val current = mutableState.value
+        if (!canUseGrade(current)) return
+        val grade = copiedGrade ?: return
+        endGesture()
+        updateRecipe(grade.applyTo(current.recipe))
+        mutableState.value = mutableState.value.copy(notice = "调色参数已粘贴")
+    }
+
+    fun dismissNotice() { mutableState.value = mutableState.value.copy(notice = null) }
+
+    private fun canUseGrade(current: EditorUiState) = current.source != null && !current.isLoading && !current.isExporting && !current.isPresetBusy
+
+    private fun mutateLibrary(message: String, operation: suspend () -> PresetLibrary) {
+        if (mutableState.value.isPresetBusy || mutableState.value.isExporting || mutableState.value.isLoading) return
+        mutableState.value = mutableState.value.copy(isPresetBusy = true, error = null, notice = null)
+        viewModelScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            try {
+                // Accepted library changes complete atomically even when the Activity finishes.
+                val library = withContext(NonCancellable) { operation() }
+                publishLibrary(library)
+                mutableState.value = mutableState.value.copy(notice = message)
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (failure: Throwable) { mutableState.value = mutableState.value.copy(error = describe(failure)) }
+            finally { mutableState.value = mutableState.value.copy(isPresetBusy = false) }
+        }
+    }
+
+    private fun publishLibrary(library: PresetLibrary) {
+        copiedGrade = library.clipboard
+        mutableState.value = mutableState.value.copy(presets = library.presets, hasCopiedGrade = library.clipboard != null)
+    }
+
+    fun export(format: ExportFormat) = export(ExportOptions(format = format))
+
+    fun export(options: ExportOptions) {
         val snapshot = mutableState.value
         val source = snapshot.source ?: return
         if (snapshot.isExporting || snapshot.isLoading) return
+        val outputSize = try { options.validate(); options.resolveSize(Geometry.outputSize(source, snapshot.recipe)) }
+        catch (failure: IllegalArgumentException) {
+            mutableState.value = mutableState.value.copy(error = describe(failure))
+            return
+        }
         endGesture()
-        mutableState.value = mutableState.value.copy(isExporting = true, exportFormat = format, error = null, savedUri = null)
+        mutableState.value = mutableState.value.copy(isExporting = true, exportFormat = options.format, exportOptions = options, error = null, savedUri = null, savedSize = null)
         viewModelScope.launch {
             var bitmap: Bitmap? = null
             try {
-                bitmap = withContext(renderDispatcher) { engine.renderExport(source, snapshot.recipe) }
-                val uri = exportRepository.save(bitmap, format)
-                mutableState.value = mutableState.value.copy(isExporting = false, savedUri = uri)
+                bitmap = withContext(renderDispatcher) { engine.renderExport(source, snapshot.recipe, options) }
+                val uri = exportRepository.save(bitmap, options)
+                mutableState.value = mutableState.value.copy(isExporting = false, savedUri = uri, savedSize = outputSize)
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (failure: Throwable) { mutableState.value = mutableState.value.copy(isExporting = false, error = describe(failure)) }
             finally {
@@ -331,13 +407,21 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun dismissError() { mutableState.value = mutableState.value.copy(error = null) }
-    fun dismissSaved() { mutableState.value = mutableState.value.copy(savedUri = null) }
+    fun dismissSaved() { mutableState.value = mutableState.value.copy(savedUri = null, savedSize = null) }
     fun closePhoto() {
         if (mutableState.value.isExporting || mutableState.value.isLoading) return
         if (mutableState.value.activeTool != null) cancelTool() else persistCommitted()
         ++importGeneration
         resetSession()
-        mutableState.value = EditorUiState(draft = mutableState.value.draft)
+        mutableState.value = newSession(draft = mutableState.value.draft)
+    }
+
+    /** Libraries and copy/paste are independent of the currently open photograph. */
+    private fun newSession(source: PhotoSource? = null, recipe: EditRecipe = EditRecipe(), draft: Draft? = null): EditorUiState {
+        val previous = mutableState.value
+        return EditorUiState(source = source, recipe = recipe, draft = draft,
+            presets = previous.presets, hasCopiedGrade = previous.hasCopiedGrade,
+            isPresetBusy = previous.isPresetBusy, exportOptions = previous.exportOptions, exportFormat = previous.exportOptions.format)
     }
 
     private fun resetSession() {

@@ -1,0 +1,11 @@
+Version: 1.2.0 Debug / versionCode 3
+Device: emulator-5556, Android 16 / API 36
+Date: 2026-10-09 (Asia/Shanghai)
+PASS: Imported 640 x 480 photo through real system Photo Picker.
+PASS: Applied non-default exposure 0.11741805, copied color grade and saved preset Landscape.
+PASS: Force-stopped the app and launched a new process. Preset library and private clipboard remained byte-identical.
+PASS: Home offered Continue editing; resumed the persisted photo and recipe.
+PASS: Landscape was visible in the preset panel and Paste color grade was enabled.
+PASS: Reset exposure to zero and applied it, then pasted the restored clipboard and applied it.
+PASS: Persisted draft exposure matched the restored clipboard value 0.11741805.
+UI screenshots: screenshots/home.png, screenshots/editor.png, screenshots/presets.png, screenshots/export.png.

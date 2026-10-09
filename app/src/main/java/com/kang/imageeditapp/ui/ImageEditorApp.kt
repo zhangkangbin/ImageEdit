@@ -218,7 +218,12 @@ fun ImageEditorApp(state: EditorUiState, actions: EditorActions) {
             AlertDialog(onDismissRequest = actions::dismissError, title = { Text("暂时无法完成") }, text = { Text(error) }, confirmButton = { TextButton(onClick = actions::dismissError) { Text("知道了") } }, containerColor = Panel)
         }
         if (state.savedUri != null) {
-            AlertDialog(onDismissRequest = actions::dismissSaved, title = { Text("图片已保存") }, text = { Text("已保存到相册的 ImageEditApp 文件夹。现在可以分享你的作品。") }, confirmButton = { TextButton(onClick = actions::shareSaved, modifier = Modifier.testTag("share-photo")) { Text("分享图片") } }, dismissButton = { TextButton(onClick = actions::dismissSaved) { Text("完成") } }, containerColor = Panel)
+            AlertDialog(onDismissRequest = actions::dismissSaved, title = { Text("图片已保存") }, text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    state.savedSize?.let { Text("${it.width} × ${it.height} 像素", color = Accent, fontSize = 13.sp, modifier = Modifier.testTag("saved-dimensions")) }
+                    Text("已保存到相册的 ImageEditApp 文件夹。现在可以分享你的作品。")
+                }
+            }, confirmButton = { TextButton(onClick = actions::shareSaved, modifier = Modifier.testTag("share-photo")) { Text("分享图片") } }, dismissButton = { TextButton(onClick = actions::dismissSaved) { Text("完成") } }, containerColor = Panel)
         }
     }
 }
@@ -761,19 +766,108 @@ private fun CropPanel(state: EditorUiState, actions: EditorActions) {
 }
 
 @Composable
-private fun ExportDialog(state: EditorUiState, dismiss: () -> Unit, export: (ExportFormat) -> Unit) {
-    var format by remember { mutableStateOf(state.exportFormat) }
-    val size = state.source?.let { Geometry.outputSize(it, state.recipe) }
-    AlertDialog(onDismissRequest = dismiss, title = { Text("导出作品", fontWeight = FontWeight.SemiBold) }, text = {
-        Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
-            Text("${size?.width ?: 0} × ${size?.height ?: 0} 像素 · 原尺寸", color = Muted, fontSize = 13.sp)
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                ChoiceChip("JPEG", format == ExportFormat.JPEG, { format = ExportFormat.JPEG }, Modifier.weight(1f).testTag("format-JPEG"))
-                ChoiceChip("PNG", format == ExportFormat.PNG, { format = ExportFormat.PNG }, Modifier.weight(1f).testTag("format-PNG"))
-            }
-            Text(if (format == ExportFormat.JPEG) "高画质 JPEG（质量 95），透明区域使用白色背景。" else "无损 PNG，保留原图的透明区域。", color = Muted, fontSize = 12.sp, lineHeight = 19.sp)
+private fun PresetsPanel(state: EditorUiState, actions: EditorActions) {
+    var nameDialog by remember { mutableStateOf(false) }
+    var editingPreset by remember { mutableStateOf<ColorPreset?>(null) }
+    var deletingPreset by remember { mutableStateOf<ColorPreset?>(null) }
+    val enabled = !state.isPresetBusy
+    Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextButton(onClick = actions::copyColorGrade, enabled = enabled, modifier = Modifier.weight(1f).testTag("copy-grade")) { Text("复制调色", fontSize = 12.sp) }
+            TextButton(onClick = actions::pasteColorGrade, enabled = enabled && state.hasCopiedGrade, modifier = Modifier.weight(1f).testTag("paste-grade")) { Text("粘贴调色", fontSize = 12.sp) }
+            TextButton(onClick = { editingPreset = null; nameDialog = true }, enabled = enabled, modifier = Modifier.weight(1f).testTag("save-preset")) { Text("保存预设", fontSize = 12.sp) }
         }
-    }, confirmButton = { TextButton(onClick = { export(format) }, modifier = Modifier.testTag("save-photo")) { Text("保存到相册", fontWeight = FontWeight.SemiBold) } }, dismissButton = { TextButton(onClick = dismiss) { Text("取消", color = Muted) } }, containerColor = Panel)
+        Text("保存调色、曲线与 HSL，在其他照片中继续使用。", color = Muted, fontSize = 10.sp)
+        if (state.isPresetBusy) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) { CircularProgressIndicator(Modifier.size(20.dp), color = Accent, strokeWidth = 2.dp) }
+        }
+        if (state.presets.isEmpty()) {
+            Column(Modifier.fillMaxWidth().padding(vertical = 22.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Glyph("preset", Muted, Modifier.size(28.dp))
+                Text("还没有个人预设", color = Muted, fontSize = 12.sp, modifier = Modifier.testTag("empty-presets"))
+                Text("调好一张照片后，点击「保存预设」。", color = Muted, fontSize = 10.sp)
+            }
+        }
+        state.presets.forEach { preset ->
+            Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Raised).padding(start = 12.dp, end = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f).testTag("preset-${preset.id}").clickable(enabled = enabled) { actions.applyPreset(preset.id) }.padding(vertical = 14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(preset.name, fontSize = 13.sp, fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text("点击预览 · 应用后保留", color = Muted, fontSize = 10.sp)
+                }
+                TextButton(onClick = { editingPreset = preset; nameDialog = true }, enabled = enabled, contentPadding = PaddingValues(horizontal = 7.dp), modifier = Modifier.testTag("rename-preset-${preset.id}")) { Text("改名", color = Muted, fontSize = 11.sp) }
+                TextButton(onClick = { deletingPreset = preset }, enabled = enabled, contentPadding = PaddingValues(horizontal = 7.dp), modifier = Modifier.testTag("delete-preset-${preset.id}")) { Text("删除", color = Muted, fontSize = 11.sp) }
+            }
+        }
+        Spacer(Modifier.height(6.dp))
+    }
+    if (nameDialog) {
+        val existing = editingPreset
+        PresetNameDialog(existing?.name.orEmpty(), existing != null, { nameDialog = false }) { name ->
+            nameDialog = false
+            if (existing == null) actions.savePreset(name) else actions.renamePreset(existing.id, name)
+        }
+    }
+    deletingPreset?.let { preset ->
+        AlertDialog(onDismissRequest = { deletingPreset = null }, title = { Text("删除这个预设？") }, text = { Text("「${preset.name}」将从个人预设中删除，当前照片的调色仍会保留。") }, confirmButton = {
+            TextButton(onClick = { deletingPreset = null; actions.deletePreset(preset.id) }, modifier = Modifier.testTag("confirm-delete-preset")) { Text("删除") }
+        }, dismissButton = { TextButton(onClick = { deletingPreset = null }, modifier = Modifier.testTag("cancel-delete-preset")) { Text("取消", color = Muted) } }, containerColor = Panel)
+    }
+}
+
+@Composable
+private fun PresetNameDialog(initialName: String, renaming: Boolean, dismiss: () -> Unit, save: (String) -> Unit) {
+    var name by remember { mutableStateOf(initialName) }
+    val trimmed = name.trim()
+    val valid = trimmed.isNotEmpty() && trimmed.codePointCount(0, trimmed.length) <= 24
+    AlertDialog(onDismissRequest = dismiss, title = { Text(if (renaming) "重命名预设" else "保存个人预设") }, text = {
+        OutlinedTextField(value = name, onValueChange = { name = it }, label = { Text("预设名称") }, singleLine = true, isError = name.isNotEmpty() && !valid, supportingText = { Text("1–24 个字", color = if (name.isNotEmpty() && !valid) MaterialTheme.colorScheme.error else Muted) }, modifier = Modifier.fillMaxWidth().testTag("preset-name"))
+    }, confirmButton = { TextButton(onClick = { save(trimmed) }, enabled = valid, modifier = Modifier.testTag("confirm-preset-name")) { Text("保存") } }, dismissButton = { TextButton(onClick = dismiss, modifier = Modifier.testTag("cancel-preset-name")) { Text("取消", color = Muted) } }, containerColor = Panel)
+}
+
+@Composable
+private fun ExportDialog(state: EditorUiState, dismiss: () -> Unit, export: (ExportOptions) -> Unit) {
+    var options by remember { mutableStateOf(state.exportOptions) }
+    var customEdge by remember { mutableStateOf(options.customLongEdge.toString()) }
+    val customValue = customEdge.toIntOrNull()
+    val valid = options.resolution != ExportResolution.CUSTOM_LONG || (customValue != null && customValue in 1..20000)
+    val effectiveOptions = options.copy(customLongEdge = if (valid && customValue != null) customValue else options.customLongEdge)
+    val originalSize = state.source?.let { Geometry.outputSize(it, state.recipe) }
+    val size = originalSize?.let(effectiveOptions::resolveSize)
+    AlertDialog(onDismissRequest = dismiss, title = { Text("导出作品", fontWeight = FontWeight.SemiBold) }, text = {
+        Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Text(if (valid) "${size?.width ?: 0} × ${size?.height ?: 0} 像素" else "请输入有效的导出尺寸", color = if (valid) Accent else MaterialTheme.colorScheme.error, fontSize = 13.sp, modifier = Modifier.testTag("export-dimensions"))
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                ChoiceChip("JPEG", options.format == ExportFormat.JPEG, { options = options.copy(format = ExportFormat.JPEG) }, Modifier.weight(1f).testTag("format-JPEG"))
+                ChoiceChip("PNG", options.format == ExportFormat.PNG, { options = options.copy(format = ExportFormat.PNG) }, Modifier.weight(1f).testTag("format-PNG"))
+            }
+            Text("输出尺寸", fontSize = 12.sp)
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ChoiceChip("原尺寸", options.resolution == ExportResolution.ORIGINAL, { options = options.copy(resolution = ExportResolution.ORIGINAL) }, Modifier.weight(1f).testTag("resolution-original"))
+                    ChoiceChip("长边 2048", options.resolution == ExportResolution.LONG_2048, { options = options.copy(resolution = ExportResolution.LONG_2048) }, Modifier.weight(1f).testTag("resolution-2048"))
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ChoiceChip("长边 1080", options.resolution == ExportResolution.LONG_1080, { options = options.copy(resolution = ExportResolution.LONG_1080) }, Modifier.weight(1f).testTag("resolution-1080"))
+                    ChoiceChip("自定义长边", options.resolution == ExportResolution.CUSTOM_LONG, { options = options.copy(resolution = ExportResolution.CUSTOM_LONG) }, Modifier.weight(1f).testTag("resolution-custom"))
+                }
+            }
+            if (options.resolution == ExportResolution.CUSTOM_LONG) {
+                OutlinedTextField(value = customEdge, onValueChange = { customEdge = it.filter(Char::isDigit).take(6) }, label = { Text("长边像素") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), isError = !valid, supportingText = { Text("1–20000 像素，保持比例，小图保留原尺寸。", color = Muted, fontSize = 10.sp) }, modifier = Modifier.fillMaxWidth().testTag("custom-export-edge"))
+            } else {
+                Text("保持裁剪比例，小图保留原尺寸。", color = Muted, fontSize = 10.sp)
+            }
+            if (options.format == ExportFormat.JPEG) {
+                Column {
+                    Row(Modifier.fillMaxWidth()) {
+                        Text("JPEG 质量", fontSize = 12.sp, modifier = Modifier.weight(1f))
+                        Text(options.jpegQuality.toString(), color = Accent, fontSize = 12.sp, modifier = Modifier.testTag("jpeg-quality-value"))
+                    }
+                    Slider(value = options.jpegQuality.toFloat().coerceIn(50f, 100f), onValueChange = { options = options.copy(jpegQuality = it.roundToInt()) }, valueRange = 50f..100f, steps = 49, colors = SliderDefaults.colors(thumbColor = Accent, activeTrackColor = Accent, inactiveTrackColor = Divider), modifier = Modifier.testTag("jpeg-quality").semantics { contentDescription = "JPEG 质量" })
+                }
+            }
+            Text(if (options.format == ExportFormat.JPEG) "JPEG 透明区域使用白色背景。" else "无损 PNG，保留原图的透明区域。", color = Muted, fontSize = 11.sp, lineHeight = 17.sp)
+        }
+    }, confirmButton = { TextButton(onClick = { export(effectiveOptions) }, enabled = valid, modifier = Modifier.testTag("save-photo")) { Text("保存到相册", fontWeight = FontWeight.SemiBold) } }, dismissButton = { TextButton(onClick = dismiss, modifier = Modifier.testTag("cancel-export")) { Text("取消", color = Muted) } }, containerColor = Panel)
 }
 
 @Composable
@@ -829,6 +923,7 @@ private fun Glyph(name: String, tint: Color, modifier: Modifier = Modifier) {
             "adjust" -> { listOf(5f, 12f, 19f).forEach { line(it, 3f, it, 21f) }; listOf(5f to 8f, 12f to 16f, 19f to 10f).forEach { drawCircle(Panel, 2.4f * s, p(it.first, it.second)); drawCircle(tint, 2.4f * s, p(it.first, it.second), style = Stroke(stroke)) } }
             "curve" -> { path(3f to 3f, 3f to 21f, 21f to 21f); val curve = Path().apply { moveTo(5f * s, 18f * s); cubicTo(16f * s, 19f * s, 8f * s, 5f * s, 20f * s, 4f * s) }; drawPath(curve, tint, style = Stroke(stroke)) }
             "color" -> { drawCircle(tint, 5.5f * s, p(9f, 9f), style = Stroke(stroke)); drawCircle(tint, 5.5f * s, p(15f, 9f), style = Stroke(stroke)); drawCircle(tint, 5.5f * s, p(12f, 15f), style = Stroke(stroke)) }
+            "preset" -> { drawRoundRect(tint, p(3f, 3f), Size(18f * s, 18f * s), androidx.compose.ui.geometry.CornerRadius(3f * s), style = Stroke(stroke)); path(7f to 8f, 17f to 8f); path(7f to 12f, 14f to 12f); path(7f to 16f, 11f to 16f) }
             "text" -> { path(4f to 6f, 4f to 4f, 20f to 4f, 20f to 6f); line(12f, 4f, 12f, 20f); line(8f, 20f, 16f, 20f) }
             "crop" -> { path(7f to 3f, 7f to 17f, 21f to 17f); path(3f to 7f, 17f to 7f, 17f to 21f); line(10f, 14f, 14f, 10f) }
             "flipH" -> { line(12f, 2f, 12f, 22f); path(9f to 5f, 3f to 18f, 9f to 18f, 9f to 5f); path(15f to 5f, 21f to 18f, 15f to 18f, 15f to 5f) }

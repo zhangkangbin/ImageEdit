@@ -93,7 +93,7 @@ data class EditRecipe(
     val watermark: Watermark = Watermark(),
 )
 
-enum class EditorTool { ADJUST, CURVES, HSL, TEXT, CROP }
+enum class EditorTool { ADJUST, CURVES, HSL, PRESETS, TEXT, CROP }
 enum class ExportFormat(val mimeType: String, val extension: String) {
     JPEG("image/jpeg", "jpg"), PNG("image/png", "png")
 }
