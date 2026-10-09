@@ -2,6 +2,8 @@
 
 中文深色界面的原生图片编辑 App，支持 Android 12（API 31）及以上。使用 Kotlin、Jetpack Compose 和 OpenGL ES 2.0，所有图片编辑在设备本地完成。
 
+版本修改与验证记录见 [修改记录](CHANGELOG.md)。后续代码、配置、文档或测试修改完成后，持续补充日期、内容及必要的验证结果，并保留历史。
+
 ## 功能
 
 - 调色：曝光、亮度、对比度、饱和度、色温、色调、阴影、高光；单项重置。
@@ -18,12 +20,14 @@
 
 ## 安装
 
-本机交付 APK 位于 `dist/ImageEditApp-debug.apk`，不随 GitHub 源码提交；从 GitHub 获取源码后，可按下方构建步骤生成 APK。将 APK 文件传到 Android 12 或更高版本手机，打开并允许该文件来源安装即可；它是用于本地测试的 Debug 包。
+本机正式签名的 Release APK 位于 `dist/ImageEditApp-release.apk`，版本为 1.2.0 / versionCode 3，已启用 R8 代码压缩、优化、混淆和资源压缩。用于本地测试的 Debug 包仍位于 `dist/ImageEditApp-debug.apk`。安装包不随 GitHub 源码提交；从源码可按下方步骤重新构建。将 APK 文件传到 Android 12 或更高版本手机，打开并允许该文件来源安装即可。
+
+Release 使用独立的新签名，与原 Debug 包不同，不能直接覆盖安装原 Debug 包；如需替换，先备份需要保留的内容，再手动卸载旧包，卸载会删除应用内草稿和个人预设。后续 Release 更新继续使用同一签名。
 
 也可通过 Android SDK 安装：
 
 ```powershell
-adb install -r .\dist\ImageEditApp-debug.apk
+adb install -r .\dist\ImageEditApp-release.apk
 ```
 
 ## 构建
@@ -38,6 +42,21 @@ $env:JAVA_HOME = 'D:\Program Files\Java\jdk-21.0.11'
 APK 输出到 `app/build/outputs/apk/debug/app-debug.apk`。首次构建需要网络下载未缓存依赖。
 
 固定版本：AGP 8.10.0、Gradle 8.12、Kotlin/Compose Compiler 2.2.10、Compose BOM 2026.02.01，JVM 目标 17，`minSdk=31`、`compileSdk=targetSdk=36`。
+
+### Release 签名与 R8
+
+本机已生成 `signing/ImageEditApp-release.jks`，密钥别名为 `imageeditapp-release`，使用 RSA 4096 位和 SHA256withRSA，证书有效期为 10000 天。签名配置和随机密码保存在根目录 `keystore.properties`，Gradle 从该文件读取凭据。请将密钥和配置一起安全备份，以便今后发布同签名更新；这两个文件以及整个 `signing/` 目录均已加入 Git 忽略规则，不包含在源码压缩包中。
+
+在其他机器构建时，恢复签名密钥，复制 `keystore.properties.example` 为 `keystore.properties`，填写实际路径、别名和密码。`storeFile` 相对于项目根目录，路径使用 `/`。缺少签名配置时 Release 构建会失败，Debug 构建不需要该文件。
+
+```powershell
+$env:JAVA_HOME = 'D:\Program Files\Java\jdk-21.0.11'
+.\gradlew.bat assembleRelease testReleaseUnitTest lintRelease
+```
+
+签名 APK 输出到 `app/build/outputs/apk/release/app-release.apk`。Release 配置启用 `isMinifyEnabled` 和 `isShrinkResources`，使用 `proguard-android-optimize.txt` 与 `app/proguard-rules.pro`；AGP 8.10 默认采用 R8 full mode，配置依据见 [Android R8 文档](https://developer.android.com/topic/performance/app-optimization/enable-app-optimization)。当前业务没有需要额外保留的反射序列化类，ViewModel 构造函数由 Lifecycle 的 consumer rules 保留。
+
+每次发布应将 `app/build/outputs/mapping/release/mapping.txt` 与对应 APK 一起归档，用于还原混淆后的崩溃堆栈。本次交付映射文件为 `dist/ImageEditApp-release-mapping.txt`，核验记录见 `dist/ImageEditApp-release-info.txt` 和 [Release 验证说明](docs/RELEASE_VALIDATION.md)。
 
 ## 设备测试
 

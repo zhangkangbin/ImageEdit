@@ -1,3 +1,4 @@
+import java.util.Properties
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
@@ -5,6 +6,16 @@ plugins {
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
 }
+
+val releaseSigningFile = rootProject.file("keystore.properties")
+val releaseSigningProperties = Properties().apply {
+    if (releaseSigningFile.isFile) {
+        releaseSigningFile.inputStream().use { load(it) }
+    }
+}
+fun releaseSigningProperty(name: String): String =
+    releaseSigningProperties.getProperty(name)?.takeIf { it.isNotBlank() }
+        ?: error("Missing '$name' in keystore.properties; see keystore.properties.example.")
 
 android {
     namespace = "com.kang.imageeditapp"
@@ -18,6 +29,28 @@ android {
         versionName = "1.2.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
+    signingConfigs {
+        create("release") {
+            if (releaseSigningFile.isFile) {
+                storeFile = rootProject.file(releaseSigningProperty("storeFile"))
+                storePassword = releaseSigningProperty("storePassword")
+                keyAlias = releaseSigningProperty("keyAlias")
+                keyPassword = releaseSigningProperty("keyPassword")
+                storeType = releaseSigningProperties.getProperty("storeType", "JKS")
+            }
+        }
+    }
+    buildTypes {
+        getByName("release") {
+            signingConfig = signingConfigs.getByName("release")
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+        }
+    }
     buildFeatures { compose = true }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -27,6 +60,21 @@ android {
 }
 
 kotlin { compilerOptions { jvmTarget.set(JvmTarget.JVM_17) } }
+
+val validateReleaseSigningConfiguration = tasks.register("validateReleaseSigningConfiguration") {
+    doLast {
+        check(releaseSigningFile.isFile) {
+            "Release signing requires keystore.properties; see keystore.properties.example."
+        }
+        check(rootProject.file(releaseSigningProperty("storeFile")).isFile) {
+            "Release keystore does not exist; check storeFile in keystore.properties."
+        }
+    }
+}
+
+tasks.matching { it.name == "preReleaseBuild" }.configureEach {
+    dependsOn(validateReleaseSigningConfiguration)
+}
 
 dependencies {
     implementation(platform("androidx.compose:compose-bom:2026.02.01"))

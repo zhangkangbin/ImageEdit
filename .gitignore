@@ -6,3 +6,10 @@ local.properties
 *.iml
 captures/
 dist/
+
+# Local release signing material and passwords.
+keystore.properties
+signing/
+*.jks
+*.keystore
+*.p12
