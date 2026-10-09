@@ -42,6 +42,9 @@ class MainActivity : ComponentActivity() {
             override fun dismissError() = model.dismissError()
             override fun dismissSaved() = model.dismissSaved()
             override fun closePhoto() = model.closePhoto()
+            override fun resumeDraft() = model.resumeDraft()
+            override fun deleteDraft() = model.deleteDraft()
+            override fun requestDetail(bounds: CropRect?, width: Int, height: Int, cropMode: Boolean, comparing: Boolean) = model.requestDetail(bounds, width, height, cropMode, comparing)
             override fun shareSaved() {
                 val state = model.state.value
                 val uri = state.savedUri ?: return

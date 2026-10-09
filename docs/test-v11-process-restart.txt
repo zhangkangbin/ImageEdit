@@ -1,0 +1,6 @@
+API 36 real process restart acceptance
+Imported a 640x480 fixture through system Google Photo Picker.
+Applied exposure=0.1365664 and confirmed the durable draft manifest.
+Executed am force-stop, then launched a fresh MainActivity process.
+Homepage displayed the draft entry; Continue returned to the editor.
+PASS: original filename and the complete recipe were unchanged.

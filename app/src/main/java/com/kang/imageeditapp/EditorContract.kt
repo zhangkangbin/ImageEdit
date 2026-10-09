@@ -3,6 +3,17 @@ package com.kang.imageeditapp
 import android.graphics.Bitmap
 import android.net.Uri
 import com.kang.imageeditapp.model.*
+import com.kang.imageeditapp.data.Draft
+import com.kang.imageeditapp.render.PreviewAnalysis
+
+/** Pixels for a visible region, positioned in the displayed image's normalized canvas. */
+data class DetailPreview(
+    val bitmap: Bitmap,
+    val bounds: CropRect,
+    val overlay: Bitmap?,
+    val cropMode: Boolean,
+    val comparing: Boolean,
+)
 
 data class EditorUiState(
     val source: PhotoSource? = null,
@@ -10,6 +21,11 @@ data class EditorUiState(
     val preview: Bitmap? = null,
     val fullPreview: Bitmap? = null,
     val originalPreview: Bitmap? = null,
+    val draft: Draft? = null,
+    val analysis: PreviewAnalysis? = null,
+    val previewOverlay: Bitmap? = null,
+    val fullPreviewOverlay: Bitmap? = null,
+    val detail: DetailPreview? = null,
     val isLoading: Boolean = false,
     val isRendering: Boolean = false,
     val isExporting: Boolean = false,
@@ -37,4 +53,7 @@ interface EditorActions {
     fun dismissSaved()
     fun shareSaved()
     fun closePhoto()
+    fun resumeDraft()
+    fun deleteDraft()
+    fun requestDetail(bounds: CropRect?, width: Int = 0, height: Int = 0, cropMode: Boolean = false, comparing: Boolean = false)
 }

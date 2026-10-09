@@ -5,7 +5,9 @@ import android.graphics.BitmapFactory
 import android.graphics.BitmapRegionDecoder
 import android.graphics.ColorSpace
 import android.graphics.Rect
+import com.kang.imageeditapp.model.CropRect
 import com.kang.imageeditapp.model.EditRecipe
+import com.kang.imageeditapp.model.ExportOptions
 import com.kang.imageeditapp.model.Geometry
 import com.kang.imageeditapp.model.NormalizedPoint
 import com.kang.imageeditapp.model.PhotoSource
@@ -28,6 +30,26 @@ class ImageRenderEngine : AutoCloseable {
     private var cachedPreview: Bitmap? = null
 
     fun renderPreview(source: PhotoSource, recipe: EditRecipe, maxEdge: Int = 1600): Bitmap {
+        val output = renderPreviewGraded(source, recipe, maxEdge)
+        return paintWatermark(output, recipe, CropRect())
+    }
+
+    fun renderAnalyzedPreview(source: PhotoSource, recipe: EditRecipe, maxEdge: Int = 1600): PreviewRenderResult =
+        finishAnalyzed(renderPreviewGraded(source, recipe, maxEdge), recipe, CropRect())
+
+    /** Region is normalized on the final cropped output. Viewport state never enters EditRecipe. */
+    fun renderRegion(
+        source: PhotoSource, recipe: EditRecipe, region: CropRect, outputWidth: Int, outputHeight: Int,
+    ): Bitmap = paintWatermark(renderRegionGraded(source, recipe, region, outputWidth, outputHeight), recipe, region)
+
+    /** ROI analysis is local. Keep renderAnalyzedPreview.analysis for a whole-image histogram. */
+    fun renderAnalyzedRegion(
+        source: PhotoSource, recipe: EditRecipe, region: CropRect, outputWidth: Int, outputHeight: Int,
+    ): PreviewRenderResult = finishAnalyzed(
+        renderRegionGraded(source, recipe, region, outputWidth, outputHeight), recipe, region,
+    )
+
+    private fun renderPreviewGraded(source: PhotoSource, recipe: EditRecipe, maxEdge: Int): Bitmap {
         require(maxEdge > 0) { "预览尺寸必须大于零" }
         val gl = acquireRenderer()
         val fullSize = Geometry.outputSize(source, recipe)
@@ -48,7 +70,6 @@ class ImageRenderEngine : AutoCloseable {
                 val coordinates = mappedCorners(source, recipe, left, top, tileWidth, tileHeight, width, height)
                 gl.renderTile(output, left, top, tileWidth, tileHeight, coordinates.toTextureCoordinates())
             }
-            WatermarkPainter.draw(output, recipe.watermark)
             return output
         } catch (error: Throwable) {
             output.recycle()
@@ -56,10 +77,28 @@ class ImageRenderEngine : AutoCloseable {
         }
     }
 
-    fun renderExport(source: PhotoSource, recipe: EditRecipe): Bitmap {
+    fun renderExport(source: PhotoSource, recipe: EditRecipe): Bitmap = renderExport(source, recipe, ExportOptions())
+
+    /** Render straight into the selected size; no full-size intermediate bitmap is created. */
+    fun renderExport(source: PhotoSource, recipe: EditRecipe, options: ExportOptions): Bitmap {
+        val size = options.resolveSize(Geometry.outputSize(source, recipe))
+        return paintWatermark(
+            renderRegionGraded(source, recipe, CropRect(), size.width, size.height, "导出"), recipe, CropRect(),
+        )
+    }
+
+    private fun renderRegionGraded(
+        source: PhotoSource,
+        recipe: EditRecipe,
+        outputRegion: CropRect,
+        outputWidth: Int,
+        outputHeight: Int,
+        action: String = "局部预览",
+    ): Bitmap {
+        validateRegion(outputRegion)
+        require(outputWidth > 0 && outputHeight > 0) { "预览尺寸必须大于零" }
         val gl = acquireRenderer()
-        val size = Geometry.outputSize(source, recipe)
-        checkMemory(size.width, size.height, gl.tileLimit, "导出")
+        checkMemory(outputWidth, outputHeight, gl.tileLimit, action)
         val decoder = try {
             BitmapRegionDecoder.newInstance(source.localPath)
         } catch (error: OutOfMemoryError) {
@@ -69,29 +108,36 @@ class ImageRenderEngine : AutoCloseable {
         }
         var output: Bitmap? = null
         try {
-            val result = allocateOutput(size.width, size.height)
+            val result = allocateOutput(outputWidth, outputHeight)
             output = result
             gl.setRecipe(recipe)
-            val options = decodeOptions(1)
-            eachTile(size.width, size.height, gl.tileLimit) { left, top, tileWidth, tileHeight ->
-                val corners = mappedCorners(source, recipe, left, top, tileWidth, tileHeight, size.width, size.height)
+            // A global sample grid preserves seams when the viewport is smaller than its source ROI.
+            val strides = regionPixelStrides(source, recipe, outputRegion, outputWidth, outputHeight)
+            var sample = 1
+            while (sample <= Int.MAX_VALUE / 2 && sample * 2 <= min(strides.first, strides.second)) sample *= 2
+            val largestStride = max(strides.first, strides.second).coerceAtLeast(.000001f)
+            // An unusual aspect ratio can map even one output pixel to a very wide source strip.
+            while (sample <= Int.MAX_VALUE / 2 && largestStride / sample + 6 > gl.textureLimit) sample *= 2
+            val tileLimit = min(gl.tileLimit, floor((gl.textureLimit - 6f) * sample / largestStride).toInt()).coerceAtLeast(1)
+            val options = decodeOptions(sample)
+            eachTile(outputWidth, outputHeight, tileLimit) { left, top, tileWidth, tileHeight ->
+                val corners = mappedCorners(source, recipe, left, top, tileWidth, tileHeight, outputWidth, outputHeight, outputRegion)
                 // Include surrounding source pixels so linear filtering is seamless across tiles.
-                val region = enclosingRegion(corners, source.width, source.height)
+                val region = enclosingRegion(corners, source.width, source.height, sample)
                 val bitmap = decoder.decodeRegion(region, options)
                     ?: error("无法读取原图分块，请重新导入图片")
                 try {
                     gl.uploadSource(bitmap)
                     val coordinates = FloatArray(8)
                     corners.forEachIndexed { index, point ->
-                        coordinates[index * 2] = (point.x * source.width - region.left) / bitmap.width
-                        coordinates[index * 2 + 1] = (point.y * source.height - region.top) / bitmap.height
+                        coordinates[index * 2] = (point.x * source.width - region.left) / (bitmap.width * sample)
+                        coordinates[index * 2 + 1] = (point.y * source.height - region.top) / (bitmap.height * sample)
                     }
                     gl.renderTile(result, left, top, tileWidth, tileHeight, coordinates)
                 } finally {
                     bitmap.recycle()
                 }
             }
-            WatermarkPainter.draw(result, recipe.watermark)
             return result
         } catch (error: Throwable) {
             output?.recycle()
@@ -99,6 +145,58 @@ class ImageRenderEngine : AutoCloseable {
         } finally {
             decoder.recycle()
         }
+    }
+
+    private fun finishAnalyzed(output: Bitmap, recipe: EditRecipe, region: CropRect): PreviewRenderResult {
+        var overlay: Bitmap? = null
+        try {
+            checkMemory(output.width, output.height, 0, "分析预览")
+            val mask = allocateOutput(output.width, output.height)
+            overlay = mask
+            val accumulator = PixelAnalysis.Accumulator()
+            val pixels = IntArray(output.width)
+            val clipping = IntArray(output.width)
+            for (y in 0 until output.height) {
+                output.getPixels(pixels, 0, output.width, 0, y, output.width, 1)
+                accumulator.add(pixels)
+                for (x in pixels.indices) clipping[x] = PixelAnalysis.clippingColor(pixels[x])
+                mask.setPixels(clipping, 0, output.width, 0, y, output.width, 1)
+            }
+            WatermarkPainter.draw(output, recipe.watermark, region)
+            return PreviewRenderResult(output, accumulator.finish(), mask)
+        } catch (error: Throwable) {
+            output.recycle()
+            overlay?.recycle()
+            throw renderFailure(error)
+        }
+    }
+
+    private fun paintWatermark(output: Bitmap, recipe: EditRecipe, region: CropRect): Bitmap {
+        try {
+            WatermarkPainter.draw(output, recipe.watermark, region)
+            return output
+        } catch (error: Throwable) {
+            output.recycle()
+            throw renderFailure(error)
+        }
+    }
+
+    private fun validateRegion(region: CropRect) {
+        require(listOf(region.left, region.top, region.right, region.bottom).all { it.isFinite() && it in 0f..1f }
+            && region.width > 0f && region.height > 0f) { "局部预览范围无效" }
+    }
+
+    private fun regionPixelStrides(source: PhotoSource, recipe: EditRecipe, region: CropRect, width: Int, height: Int): Pair<Float, Float> {
+        val corners = mappedCorners(source, recipe, 0, 0, width, height, width, height, region)
+        val horizontalPixels = max(
+            kotlin.math.abs(corners[2].x - corners[0].x) * source.width,
+            kotlin.math.abs(corners[2].y - corners[0].y) * source.height,
+        ) / width
+        val verticalPixels = max(
+            kotlin.math.abs(corners[1].x - corners[0].x) * source.width,
+            kotlin.math.abs(corners[1].y - corners[0].y) * source.height,
+        ) / height
+        return horizontalPixels to verticalPixels
     }
 
     private fun acquireRenderer(): HeadlessGlRenderer {
@@ -182,11 +280,12 @@ class ImageRenderEngine : AutoCloseable {
         tileHeight: Int,
         outputWidth: Int,
         outputHeight: Int,
+        region: CropRect = CropRect(),
     ): List<NormalizedPoint> {
-        val u0 = left.toFloat() / outputWidth
-        val v0 = top.toFloat() / outputHeight
-        val u1 = (left + tileWidth).toFloat() / outputWidth
-        val v1 = (top + tileHeight).toFloat() / outputHeight
+        val u0 = region.left + left.toFloat() / outputWidth * region.width
+        val v0 = region.top + top.toFloat() / outputHeight * region.height
+        val u1 = region.left + (left + tileWidth).toFloat() / outputWidth * region.width
+        val v1 = region.top + (top + tileHeight).toFloat() / outputHeight * region.height
         return listOf(
             Geometry.outputToSource(u0, v0, recipe, source.exifOrientation),
             Geometry.outputToSource(u0, v1, recipe, source.exifOrientation),
@@ -195,11 +294,11 @@ class ImageRenderEngine : AutoCloseable {
         )
     }
 
-    private fun enclosingRegion(corners: List<NormalizedPoint>, width: Int, height: Int): Rect {
-        val left = (floor(corners.minOf { it.x }.toDouble() * width).toInt() - 2).coerceIn(0, width - 1)
-        val top = (floor(corners.minOf { it.y }.toDouble() * height).toInt() - 2).coerceIn(0, height - 1)
-        val right = (ceil(corners.maxOf { it.x }.toDouble() * width).toInt() + 2).coerceIn(left + 1, width)
-        val bottom = (ceil(corners.maxOf { it.y }.toDouble() * height).toInt() + 2).coerceIn(top + 1, height)
+    private fun enclosingRegion(corners: List<NormalizedPoint>, width: Int, height: Int, sample: Int = 1): Rect {
+        val left = ((floor(corners.minOf { it.x }.toDouble() * width / sample).toInt() - 2) * sample).coerceIn(0, width - 1)
+        val top = ((floor(corners.minOf { it.y }.toDouble() * height / sample).toInt() - 2) * sample).coerceIn(0, height - 1)
+        val right = ((ceil(corners.maxOf { it.x }.toDouble() * width / sample).toInt() + 2) * sample).coerceIn(left + 1, width)
+        val bottom = ((ceil(corners.maxOf { it.y }.toDouble() * height / sample).toInt() + 2) * sample).coerceIn(top + 1, height)
         return Rect(left, top, right, bottom)
     }
 

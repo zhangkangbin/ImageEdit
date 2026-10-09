@@ -1,6 +1,7 @@
 package com.kang.imageeditapp.ui
 
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Paint
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
@@ -10,7 +11,9 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.calculateCentroid
+import androidx.compose.foundation.gestures.calculatePan
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -63,6 +66,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
@@ -71,8 +75,12 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
+import androidx.compose.ui.graphics.FilterQuality
+import androidx.compose.ui.graphics.ClipOp
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -84,25 +92,35 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kang.imageeditapp.EditorActions
 import com.kang.imageeditapp.EditorUiState
 import com.kang.imageeditapp.model.ColorAdjustments
+import com.kang.imageeditapp.model.ColorPreset
 import com.kang.imageeditapp.model.CropRect
 import com.kang.imageeditapp.model.CurveChannel
 import com.kang.imageeditapp.model.CurvePoint
 import com.kang.imageeditapp.model.EditRecipe
 import com.kang.imageeditapp.model.EditorTool
 import com.kang.imageeditapp.model.ExportFormat
+import com.kang.imageeditapp.model.ExportOptions
+import com.kang.imageeditapp.model.ExportResolution
 import com.kang.imageeditapp.model.Geometry
 import com.kang.imageeditapp.render.CurveInterpolator
+import com.kang.imageeditapp.render.PreviewAnalysis
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
+import java.text.DateFormat
+import java.util.Date
 import java.util.Locale
 import kotlin.math.abs
-import kotlin.math.hypot
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
@@ -113,7 +131,7 @@ private val Raised = Color(0xFF252B2F)
 private val Accent = Color(0xFF80E7CD)
 private val Muted = Color(0xFF94A1A9)
 private val Divider = Color(0xFF30383C)
-private val ToolNames = mapOf(EditorTool.ADJUST to "调色", EditorTool.CURVES to "曲线", EditorTool.HSL to "HSL", EditorTool.TEXT to "文字", EditorTool.CROP to "裁剪")
+private val ToolNames = mapOf(EditorTool.ADJUST to "调色", EditorTool.CURVES to "曲线", EditorTool.HSL to "HSL", EditorTool.PRESETS to "预设", EditorTool.TEXT to "文字", EditorTool.CROP to "裁剪")
 
 /** Single screen editor; rendering, import and storage remain in the ViewModel. */
 @Composable
@@ -121,6 +139,9 @@ fun ImageEditorApp(state: EditorUiState, actions: EditorActions) {
     var comparing by remember { mutableStateOf(false) }
     var exportDialog by remember { mutableStateOf(false) }
     var closeDialog by remember { mutableStateOf(false) }
+    var deleteDraftDialog by remember { mutableStateOf(false) }
+    var histogramExpanded by remember { mutableStateOf(false) }
+    var clippingEnabled by remember { mutableStateOf(false) }
     val focus = LocalFocusManager.current
     MaterialTheme(colorScheme = darkColorScheme(primary = Accent, onPrimary = Ink, background = Ink, surface = Panel, onSurface = Color(0xFFEAF0F2), secondary = Accent)) {
         BackHandler(enabled = state.source != null) {
@@ -134,7 +155,7 @@ fun ImageEditorApp(state: EditorUiState, actions: EditorActions) {
                 val wide = maxWidth > maxHeight
                 Column(Modifier.fillMaxSize()) {
                     if (state.source == null) {
-                        EmptyEditor(actions::importPhoto)
+                        EmptyEditor(state, actions, { deleteDraftDialog = true })
                     } else {
                         EditorHeader(state, actions, comparing, { comparing = it }, {
                             focus.clearFocus()
@@ -143,15 +164,22 @@ fun ImageEditorApp(state: EditorUiState, actions: EditorActions) {
                             focus.clearFocus()
                             closeDialog = true
                         })
+                        AnalysisPanel(state.analysis, histogramExpanded, { histogramExpanded = !histogramExpanded }, clippingEnabled, { clippingEnabled = !clippingEnabled })
+                        state.notice?.let { notice ->
+                            Row(Modifier.fillMaxWidth().background(Raised).padding(start = 20.dp, end = 8.dp).testTag("operation-notice"), verticalAlignment = Alignment.CenterVertically) {
+                                Text(notice, modifier = Modifier.weight(1f), color = Accent, fontSize = 12.sp)
+                                TextButton(onClick = actions::dismissNotice, modifier = Modifier.testTag("dismiss-notice")) { Text("关闭", color = Muted, fontSize = 12.sp) }
+                            }
+                        }
                         if (wide && state.activeTool != null) {
                             Row(Modifier.weight(1f).fillMaxWidth()) {
-                                PreviewStage(state, actions, comparing, Modifier.weight(1f).fillMaxHeight())
+                                PreviewStage(state, actions, comparing, clippingEnabled, Modifier.weight(1f).fillMaxHeight())
                                 Box(Modifier.width(320.dp).fillMaxHeight().background(Panel)) {
                                     ToolPanel(state.activeTool, state, actions, { focus.clearFocus(); actions.applyTool() }, { focus.clearFocus(); actions.cancelTool() })
                                 }
                             }
                         } else {
-                            PreviewStage(state, actions, comparing, Modifier.weight(1f).fillMaxWidth())
+                            PreviewStage(state, actions, comparing, clippingEnabled, Modifier.weight(1f).fillMaxWidth())
                             state.activeTool?.let { tool ->
                                 ToolPanel(tool, state, actions, { focus.clearFocus(); actions.applyTool() }, { focus.clearFocus(); actions.cancelTool() })
                             }
@@ -169,19 +197,22 @@ fun ImageEditorApp(state: EditorUiState, actions: EditorActions) {
                 }, contentAlignment = Alignment.Center) {
                     Column(Modifier.clip(RoundedCornerShape(22.dp)).background(Panel).padding(horizontal = 32.dp, vertical = 28.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(18.dp)) {
                         CircularProgressIndicator(color = Accent, strokeWidth = 3.dp, modifier = Modifier.size(32.dp))
-                        Text(if (state.isExporting) "正在保存原尺寸图片…" else "正在打开图片…", fontSize = 15.sp)
+                        Text(if (state.isExporting) "正在保存图片…" else "正在打开图片…", fontSize = 15.sp)
                     }
                 }
             }
         }
         if (exportDialog) {
-            ExportDialog(state, { exportDialog = false }) { format ->
+            ExportDialog(state, { exportDialog = false }) { options ->
                 exportDialog = false
-                actions.export(format)
+                actions.export(options)
             }
         }
         if (closeDialog) {
-            AlertDialog(onDismissRequest = { closeDialog = false }, title = { Text("结束本次编辑？") }, text = { Text("未导出的修改不会保存。你可以先导出图片，再选择新的照片。") }, confirmButton = { TextButton(onClick = { closeDialog = false; actions.closePhoto() }) { Text("结束编辑") } }, dismissButton = { TextButton(onClick = { closeDialog = false }) { Text("继续编辑") } }, containerColor = Panel)
+            AlertDialog(onDismissRequest = { closeDialog = false }, title = { Text("结束本次编辑？") }, text = { Text("已应用的修改会自动保存为草稿，返回首页后可以继续编辑。") }, confirmButton = { TextButton(onClick = { closeDialog = false; actions.closePhoto() }) { Text("结束编辑") } }, dismissButton = { TextButton(onClick = { closeDialog = false }) { Text("继续编辑") } }, containerColor = Panel)
+        }
+        if (deleteDraftDialog) {
+            AlertDialog(onDismissRequest = { deleteDraftDialog = false }, title = { Text("删除最近的草稿？") }, text = { Text("草稿中的原图与编辑进度将被删除，已导出的图片仍在相册中。") }, confirmButton = { TextButton(onClick = { deleteDraftDialog = false; actions.deleteDraft() }, modifier = Modifier.testTag("confirm-delete-draft")) { Text("删除草稿") } }, dismissButton = { TextButton(onClick = { deleteDraftDialog = false }) { Text("取消") } }, containerColor = Panel)
         }
         state.error?.let { error ->
             AlertDialog(onDismissRequest = actions::dismissError, title = { Text("暂时无法完成") }, text = { Text(error) }, confirmButton = { TextButton(onClick = actions::dismissError) { Text("知道了") } }, containerColor = Panel)
@@ -193,7 +224,12 @@ fun ImageEditorApp(state: EditorUiState, actions: EditorActions) {
 }
 
 @Composable
-private fun EmptyEditor(importPhoto: () -> Unit) {
+private fun EmptyEditor(state: EditorUiState, actions: EditorActions, deleteDraft: () -> Unit) {
+    val draft = state.draft
+    var thumbnail by remember(draft?.thumbnailPath) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(draft?.thumbnailPath) {
+        thumbnail = withContext(Dispatchers.IO) { draft?.thumbnailPath?.let { BitmapFactory.decodeFile(it) } }
+    }
     Column(Modifier.fillMaxSize().background(Brush.verticalGradient(listOf(Color(0xFF182422), Ink, Ink)))) {
         Row(Modifier.fillMaxWidth().padding(24.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(32.dp).clip(RoundedCornerShape(9.dp)).background(Accent), contentAlignment = Alignment.Center) { Glyph("spark", Ink, Modifier.size(20.dp)) }
@@ -231,9 +267,22 @@ private fun EmptyEditor(importPhoto: () -> Unit) {
             }
             Text("让照片，成为作品", fontSize = 28.sp, fontWeight = FontWeight.Bold, letterSpacing = .3.sp)
             Text("细调光影与色彩，留下一句心情。\n从一张喜欢的照片开始。", color = Muted, textAlign = TextAlign.Center, lineHeight = 24.sp, fontSize = 15.sp, modifier = Modifier.padding(top = 14.dp, bottom = 28.dp))
-            Button(onClick = importPhoto, shape = RoundedCornerShape(16.dp), contentPadding = PaddingValues(horizontal = 30.dp, vertical = 16.dp), colors = ButtonDefaults.buttonColors(containerColor = Accent), modifier = Modifier.testTag("import-photo")) {
+            Button(onClick = actions::importPhoto, shape = RoundedCornerShape(16.dp), contentPadding = PaddingValues(horizontal = 30.dp, vertical = 16.dp), colors = ButtonDefaults.buttonColors(containerColor = Accent), modifier = Modifier.testTag("import-photo")) {
                 Glyph("add", Ink, Modifier.size(19.dp))
                 Text("选择一张照片", modifier = Modifier.padding(start = 9.dp), fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+            }
+            if (draft != null) {
+                Row(Modifier.padding(top = 22.dp).widthIn(max = 380.dp).fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(Panel).padding(12.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Box(Modifier.size(54.dp).clip(RoundedCornerShape(9.dp)).background(Raised), contentAlignment = Alignment.Center) {
+                        thumbnail?.let { Image(it.asImageBitmap(), "最近草稿", Modifier.fillMaxSize(), contentScale = ContentScale.Crop) } ?: Glyph("crop", Muted, Modifier.size(22.dp))
+                    }
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Text("最近的草稿", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        Text(DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(draft.savedAtMillis)), color = Muted, fontSize = 10.sp)
+                        TextButton(onClick = actions::resumeDraft, contentPadding = PaddingValues(0.dp), modifier = Modifier.height(30.dp).testTag("continue-draft")) { Text("继续编辑", color = Accent, fontSize = 12.sp) }
+                    }
+                    TextButton(onClick = deleteDraft, modifier = Modifier.testTag("delete-draft"), contentPadding = PaddingValues(6.dp)) { Text("删除", color = Muted, fontSize = 12.sp) }
+                }
             }
             Row(Modifier.padding(top = 28.dp), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
                 listOf("专业调色", "文字水印", "自由裁剪").forEach { Text(it, color = Muted, fontSize = 12.sp) }
@@ -263,14 +312,58 @@ private fun EditorHeader(state: EditorUiState, actions: EditorActions, comparing
 }
 
 @Composable
-private fun PreviewStage(state: EditorUiState, actions: EditorActions, comparing: Boolean, modifier: Modifier = Modifier) {
+private fun AnalysisPanel(analysis: PreviewAnalysis?, expanded: Boolean, toggleExpanded: () -> Unit, clipping: Boolean, toggleClipping: () -> Unit) {
+    var luminanceOnly by remember { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth().background(Panel)) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(if (expanded) "直方图 ▴" else "直方图 ▾", color = if (expanded) Accent else Muted, fontSize = 12.sp, modifier = Modifier.weight(1f).clip(RoundedCornerShape(8.dp)).clickable(onClick = toggleExpanded).padding(vertical = 7.dp).testTag("toggle-histogram"))
+            ChoiceChip("溢出提示${if (clipping) " · 开" else ""}", clipping, toggleClipping, Modifier.testTag("toggle-clipping"))
+        }
+        if (expanded) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ChoiceChip("RGB", !luminanceOnly, { luminanceOnly = false }, Modifier.testTag("histogram-rgb"))
+                ChoiceChip("亮度", luminanceOnly, { luminanceOnly = true }, Modifier.testTag("histogram-luminance"))
+                Spacer(Modifier.weight(1f))
+                Text("全图 · 256 档", color = Muted, fontSize = 10.sp)
+            }
+            Canvas(Modifier.fillMaxWidth().height(76.dp).padding(horizontal = 20.dp, vertical = 9.dp).testTag("histogram-plot").semantics { contentDescription = if (luminanceOnly) "亮度直方图，256 档" else "RGB 直方图，256 档" }) {
+                drawRect(Ink)
+                for (i in 1..3) drawLine(Divider, Offset(size.width * i / 4f, 0f), Offset(size.width * i / 4f, size.height), 1f)
+                val channels = if (luminanceOnly) listOf(analysis?.luminance to Color(0xFFD5E4E0)) else listOf(analysis?.red to Color(0xFFFF8585), analysis?.green to Color(0xFF91E09C), analysis?.blue to Color(0xFF86B9FF))
+                val peak = channels.maxOfOrNull { it.first?.maxOrNull() ?: 0 }?.coerceAtLeast(1) ?: 1
+                channels.forEach { (bins, color) ->
+                    if (bins != null && bins.size == 256) {
+                        val path = Path()
+                        bins.forEachIndexed { index, count ->
+                            val x = size.width * index / 255f
+                            val y = size.height - count.toFloat() / peak * (size.height - 2f)
+                            if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
+                        }
+                        drawPath(path, color.copy(alpha = .86f), style = Stroke(1.3.dp.toPx()))
+                    }
+                }
+            }
+            Row(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, bottom = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+                fun percent(count: Long) = if (analysis == null || analysis.sampleCount == 0L) "—" else String.format(Locale.ROOT, "%.1f%%", count * 100.0 / analysis.sampleCount)
+                Text("阴影 ${percent(analysis?.shadowCount ?: 0)}", color = Color(0xFF86B9FF), fontSize = 10.sp)
+                Text("水印不参与统计", color = Muted, fontSize = 10.sp)
+                Text("高光 ${percent(analysis?.highlightCount ?: 0)}", color = Color(0xFFFF8585), fontSize = 10.sp)
+            }
+        } else if (clipping) {
+            Text("红色：高光溢出    蓝色：阴影溢出", color = Muted, fontSize = 10.sp, modifier = Modifier.padding(start = 18.dp, bottom = 7.dp))
+        }
+    }
+}
+
+@Composable
+private fun PreviewStage(state: EditorUiState, actions: EditorActions, comparing: Boolean, clipping: Boolean, modifier: Modifier = Modifier) {
     val cropMode = state.activeTool == EditorTool.CROP && !comparing
     val bitmap = when { comparing -> state.originalPreview; cropMode -> state.fullPreview; else -> state.preview }
     val source = state.source ?: return
     val output = Geometry.outputSize(source, state.recipe)
     Box(modifier.background(Color(0xFF0B0E10))) {
         if (bitmap != null) {
-            PhotoCanvas(bitmap, state, actions, cropMode, !comparing && state.activeTool == EditorTool.TEXT, Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 38.dp))
+            PhotoCanvas(bitmap, state, actions, cropMode, !comparing && state.activeTool == EditorTool.TEXT, comparing, clipping && !comparing, Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 38.dp))
         } else {
             CircularProgressIndicator(Modifier.align(Alignment.Center).size(28.dp), color = Accent, strokeWidth = 2.dp)
         }
@@ -281,62 +374,135 @@ private fun PreviewStage(state: EditorUiState, actions: EditorActions, comparing
         if (state.isRendering) {
             CircularProgressIndicator(Modifier.align(Alignment.TopEnd).padding(14.dp).size(14.dp), color = Accent, strokeWidth = 1.5.dp)
         }
-        Text(when { comparing -> "松开返回编辑效果"; cropMode -> "拖动边角调整范围，拖动选区移动"; state.activeTool == EditorTool.TEXT && state.recipe.watermark.text.isNotBlank() -> "拖动文字调整位置"; else -> "按住顶部对比按钮查看原图" }, color = Muted, fontSize = 11.sp, modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp))
+        Text(when { comparing -> "松开返回编辑效果"; cropMode -> "单指调整裁剪 · 双指缩放查看"; state.activeTool == EditorTool.TEXT && state.recipe.watermark.text.isNotBlank() -> "拖动文字 · 双指缩放查看"; else -> "双指缩放与平移 · 双击查看 100%" }, color = Muted, fontSize = 11.sp, modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp))
     }
 }
 
 @Composable
-private fun PhotoCanvas(bitmap: Bitmap, state: EditorUiState, actions: EditorActions, cropMode: Boolean, textMode: Boolean, modifier: Modifier) {
+private fun PhotoCanvas(bitmap: Bitmap, state: EditorUiState, actions: EditorActions, cropMode: Boolean, textMode: Boolean, comparing: Boolean, clipping: Boolean, modifier: Modifier) {
     var frameSize by remember { mutableStateOf(IntSize.Zero) }
     val latestRecipe by rememberUpdatedState(state.recipe)
     val latestActions by rememberUpdatedState(actions)
     val activeAspect by rememberUpdatedState(CropAspect.selected)
     val source = state.source ?: return
     val transformed = Geometry.transformedSize(source, state.recipe)
+    val imageSize = if (cropMode) transformed else Geometry.outputSize(source, state.recipe)
+    val recipe = state.recipe
+    var viewport by remember(source.localPath, cropMode, recipe.quarterTurns, recipe.flipHorizontal, recipe.flipVertical, if (cropMode) null else recipe.crop) { mutableStateOf(PreviewViewport()) }
+    val geometry = ViewportGeometry(frameSize.width, frameSize.height, imageSize.width, imageSize.height)
     val density = LocalDensity.current.density
-    Box(modifier.onSizeChanged { frameSize = it }) {
-        val frame = fitRect(frameSize, bitmap.width, bitmap.height)
-        val width = with(LocalDensity.current) { frame.width.toDp() }
-        val height = with(LocalDensity.current) { frame.height.toDp() }
-        Image(bitmap.asImageBitmap(), "图片预览", Modifier.align(Alignment.Center).size(width, height), contentScale = ContentScale.FillBounds)
-        if (cropMode) {
-            Canvas(Modifier.fillMaxSize().testTag("crop-canvas").pointerInput(frameSize, bitmap.width, bitmap.height, cropMode) {
-                var handle = CropHandle.NONE
-                var startCrop = CropRect()
-                var total = Offset.Zero
-                detectDragGestures(onDragStart = { at ->
-                    startCrop = latestRecipe.crop
-                    total = Offset.Zero
-                    handle = cropHandle(at, frame, startCrop, 26f * density)
-                    if (handle != CropHandle.NONE) latestActions.beginGesture()
-                }, onDragEnd = { if (handle != CropHandle.NONE) latestActions.endGesture(); handle = CropHandle.NONE }, onDragCancel = { if (handle != CropHandle.NONE) latestActions.endGesture(); handle = CropHandle.NONE }) { change, delta ->
-                    if (handle != CropHandle.NONE && frame.width > 0 && frame.height > 0) {
-                        change.consume()
-                        total += delta
-                        val ratio = aspectRatio(activeAspect, transformed.width, transformed.height)?.let { it * transformed.height / transformed.width }
-                        val moved = moveCrop(startCrop, handle, total.x / frame.width, total.y / frame.height, ratio)
-                        latestActions.updateRecipe(latestRecipe.copy(crop = moved))
+    val frameGeometry = geometry.frame(viewport)
+    val frame = Rect(frameGeometry.left, frameGeometry.top, frameGeometry.right, frameGeometry.bottom)
+    val visibleBounds = geometry.visibleBounds(viewport)
+    val detailWidth = min(frame.width, frameSize.width.toFloat()).roundToInt().coerceAtLeast(1)
+    val detailHeight = min(frame.height, frameSize.height.toFloat()).roundToInt().coerceAtLeast(1)
+    val wantsDetail = viewport.zoom > 1.01f || geometry.fitScale * viewport.zoom >= .99f
+    LaunchedEffect(source.localPath, visibleBounds, detailWidth, detailHeight, cropMode, comparing, wantsDetail) {
+        if (geometry.valid && wantsDetail) {
+            delay(80)
+            actions.requestDetail(visibleBounds, detailWidth, detailHeight, cropMode, comparing)
+        } else actions.requestDetail(null)
+    }
+    val baseOverlay = if (cropMode) state.fullPreviewOverlay else state.previewOverlay
+    val detail = state.detail?.takeIf { it.cropMode == cropMode && it.comparing == comparing }
+    Box(modifier.clipToBounds().onSizeChanged { frameSize = it }.testTag("photo-canvas").semantics { contentDescription = "图片预览，可双指缩放、平移及双击查看原始像素" }.pointerInput(geometry, cropMode, textMode) {
+        var lastTapTime = 0L
+        var lastTapAt = Offset.Zero
+        awaitEachGesture {
+            val down = awaitFirstDown(requireUnconsumed = false)
+            val startViewport = viewport
+            val startRecipe = latestRecipe
+            val f = geometry.frame(startViewport)
+            val startFrame = Rect(f.left, f.top, f.right, f.bottom)
+            val handle = if (cropMode) cropHandle(down.position, startFrame, startRecipe.crop, 26f * density) else CropHandle.NONE
+            val touchingText = textMode && startRecipe.watermark.text.isNotBlank() && watermarkRect(startFrame, startRecipe).inflate(22f * density).contains(down.position)
+            var moved = false
+            var multiple = false
+            var editing = false
+            var finalTime = down.uptimeMillis
+            try {
+                do {
+                    val event = awaitPointerEvent()
+                    val pressed = event.changes.count { it.pressed }
+                    finalTime = event.changes.maxOf { it.uptimeMillis }
+                    if (pressed >= 2) {
+                        // A second finger promotes the entire gesture to view movement, not an edit.
+                        if (editing) { latestActions.updateRecipe(startRecipe); latestActions.endGesture(); editing = false }
+                        multiple = true; moved = true
+                        val center = event.calculateCentroid(useCurrent = false)
+                        val pan = event.calculatePan()
+                        viewport = geometry.transform(viewport, event.calculateZoom(), pan.x, pan.y, center.x, center.y)
+                        event.changes.forEach { it.consume() }
+                    } else if (multiple) {
+                        val pan = event.calculatePan()
+                        viewport = geometry.constrain(viewport.copy(panX = viewport.panX + pan.x, panY = viewport.panY + pan.y))
+                        event.changes.forEach { it.consume() }
+                    } else {
+                        val change = event.changes.firstOrNull { it.id == down.id } ?: event.changes.first()
+                        val total = change.position - down.position
+                        if (total.getDistance() > viewConfiguration.touchSlop || moved) {
+                            moved = true
+                            if (geometry.valid && (handle != CropHandle.NONE || touchingText)) {
+                                if (!editing) { latestActions.beginGesture(); editing = true }
+                                if (handle != CropHandle.NONE) {
+                                    val ratio = aspectRatio(activeAspect, transformed.width, transformed.height)?.let { it * transformed.height / transformed.width }
+                                    latestActions.updateRecipe(latestRecipe.copy(crop = moveCrop(startRecipe.crop, handle, total.x / startFrame.width, total.y / startFrame.height, ratio)))
+                                } else {
+                                    val mark = startRecipe.watermark
+                                    latestActions.updateRecipe(latestRecipe.copy(watermark = mark.copy(x = (mark.x + total.x / startFrame.width).coerceIn(0f, 1f), y = (mark.y + total.y / startFrame.height).coerceIn(0f, 1f))))
+                                }
+                            } else {
+                                viewport = geometry.constrain(startViewport.copy(panX = startViewport.panX + total.x, panY = startViewport.panY + total.y))
+                            }
+                            change.consume()
+                        }
                     }
+                } while (event.changes.any { it.pressed })
+            } finally { if (editing) latestActions.endGesture() }
+            if (!moved && finalTime - down.uptimeMillis < viewConfiguration.longPressTimeoutMillis) {
+                if (down.uptimeMillis - lastTapTime in viewConfiguration.doubleTapMinTimeMillis..viewConfiguration.doubleTapTimeoutMillis && (down.position - lastTapAt).getDistance() < 40f * density) {
+                    viewport = if (abs(viewport.zoom - geometry.nativeZoom) < .03f) PreviewViewport() else geometry.transform(viewport, geometry.nativeZoom / viewport.zoom, 0f, 0f, down.position.x, down.position.y)
+                    lastTapTime = 0L
+                } else { lastTapTime = finalTime; lastTapAt = down.position }
+            } else lastTapTime = 0L
+        }
+    }) {
+        Canvas(Modifier.fillMaxSize()) {
+            clipRect {
+                fun drawBitmap(image: Bitmap, destination: Rect) {
+                    if (destination.width > 0 && destination.height > 0) drawImage(image.asImageBitmap(), dstOffset = IntOffset(destination.left.roundToInt(), destination.top.roundToInt()), dstSize = IntSize(destination.width.roundToInt().coerceAtLeast(1), destination.height.roundToInt().coerceAtLeast(1)), filterQuality = FilterQuality.Medium)
                 }
-            }) { drawCrop(frame, state.recipe.crop, density) }
-        } else if (textMode && state.recipe.watermark.text.isNotBlank()) {
-            Canvas(Modifier.fillMaxSize().testTag("watermark-canvas").pointerInput(frameSize, textMode, bitmap.width, bitmap.height) {
-                var dragging = false
-                detectDragGestures(onDragStart = { at ->
-                    dragging = watermarkRect(frame, latestRecipe).inflate(22f * density).contains(at)
-                    if (dragging) latestActions.beginGesture()
-                }, onDragEnd = { if (dragging) latestActions.endGesture(); dragging = false }, onDragCancel = { if (dragging) latestActions.endGesture(); dragging = false }) { change, delta ->
-                    if (dragging && frame.width > 0 && frame.height > 0) {
-                        change.consume()
-                        val mark = latestRecipe.watermark
-                        latestActions.updateRecipe(latestRecipe.copy(watermark = mark.copy(x = (mark.x + delta.x / frame.width).coerceIn(0f, 1f), y = (mark.y + delta.y / frame.height).coerceIn(0f, 1f))))
-                    }
+                fun drawBase() {
+                    drawBitmap(bitmap, frame)
+                    if (clipping && baseOverlay != null) drawBitmap(baseOverlay, frame)
                 }
-            }) {
-                val bound = watermarkRect(frame, state.recipe).inflate(6f * density)
-                drawRoundRect(Accent.copy(alpha = .8f), bound.topLeft, bound.size, androidx.compose.ui.geometry.CornerRadius(3f * density), style = Stroke(density, pathEffect = PathEffect.dashPathEffect(floatArrayOf(5f * density, 4f * density))))
-                drawCircle(Accent, 3f * density, Offset(bound.right, bound.bottom))
+                if (detail == null) drawBase() else {
+                    val region = cropPixelRect(frame, detail.bounds)
+                    val detailFrame = Rect(region.left.roundToInt().toFloat(), region.top.roundToInt().toFloat(), region.left.roundToInt() + region.width.roundToInt().coerceAtLeast(1).toFloat(), region.top.roundToInt() + region.height.roundToInt().coerceAtLeast(1).toFloat())
+                    // Exclude the detail region instead of layering it over the sampled bitmap:
+                    // PNG transparency and clipping masks must be composited exactly once.
+                    clipPath(Path().apply { addRect(detailFrame) }, ClipOp.Difference) { drawBase() }
+                    val it = detail
+                    drawBitmap(it.bitmap, detailFrame)
+                    if (clipping && it.overlay != null) drawBitmap(it.overlay, detailFrame)
+                }
             }
+        }
+        if (cropMode) {
+            Canvas(Modifier.fillMaxSize().testTag("crop-canvas")) { clipRect { drawCrop(frame, state.recipe.crop, density) } }
+        } else if (textMode && state.recipe.watermark.text.isNotBlank()) {
+            Canvas(Modifier.fillMaxSize().testTag("watermark-canvas")) {
+                clipRect {
+                    val bound = watermarkRect(frame, state.recipe).inflate(6f * density)
+                    drawRoundRect(Accent.copy(alpha = .8f), bound.topLeft, bound.size, androidx.compose.ui.geometry.CornerRadius(3f * density), style = Stroke(density, pathEffect = PathEffect.dashPathEffect(floatArrayOf(5f * density, 4f * density))))
+                    drawCircle(Accent, 3f * density, Offset(bound.right, bound.bottom))
+                }
+            }
+        }
+        Row(Modifier.align(Alignment.BottomEnd).padding(6.dp).clip(RoundedCornerShape(11.dp)).background(Ink.copy(alpha = .86f)).padding(3.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("${(geometry.fitScale * viewport.zoom * 100f).roundToInt()}%", color = Muted, fontSize = 10.sp, modifier = Modifier.padding(horizontal = 7.dp).testTag("zoom-percent"))
+            TextButton(onClick = { viewport = PreviewViewport() }, contentPadding = PaddingValues(horizontal = 7.dp), modifier = Modifier.height(30.dp).testTag("zoom-fit")) { Text("适配", color = if (abs(viewport.zoom - 1f) < .01f) Accent else Muted, fontSize = 11.sp) }
+            TextButton(onClick = { viewport = geometry.constrain(PreviewViewport(geometry.nativeZoom)) }, contentPadding = PaddingValues(horizontal = 7.dp), modifier = Modifier.height(30.dp).testTag("zoom-native")) { Text("100%", color = if (abs(viewport.zoom - geometry.nativeZoom) < .01f) Accent else Muted, fontSize = 11.sp) }
         }
     }
 }
@@ -347,7 +513,7 @@ private fun ToolNavigation(active: EditorTool?, enabled: Boolean, select: (Edito
         EditorTool.entries.forEach { tool ->
             val selected = active == tool
             Column(Modifier.weight(1f).clip(RoundedCornerShape(12.dp)).background(if (selected) Accent.copy(alpha = .1f) else Color.Transparent).testTag("tool-${tool.name.lowercase(Locale.ROOT)}").clickable(enabled = enabled) { select(tool) }.padding(vertical = 9.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                Glyph(when (tool) { EditorTool.ADJUST -> "adjust"; EditorTool.CURVES -> "curve"; EditorTool.HSL -> "color"; EditorTool.TEXT -> "text"; EditorTool.CROP -> "crop" }, if (selected) Accent else Muted, Modifier.size(23.dp))
+                Glyph(when (tool) { EditorTool.ADJUST -> "adjust"; EditorTool.CURVES -> "curve"; EditorTool.HSL -> "color"; EditorTool.PRESETS -> "preset"; EditorTool.TEXT -> "text"; EditorTool.CROP -> "crop" }, if (selected) Accent else Muted, Modifier.size(23.dp))
                 Text(ToolNames.getValue(tool), fontSize = 11.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal, color = if (selected) Accent else Muted)
             }
         }
@@ -368,6 +534,7 @@ private fun ToolPanel(tool: EditorTool, state: EditorUiState, actions: EditorAct
                 EditorTool.ADJUST -> AdjustPanel(state.recipe, actions)
                 EditorTool.CURVES -> CurvesPanel(state.recipe, actions)
                 EditorTool.HSL -> HslPanel(state.recipe, actions)
+                EditorTool.PRESETS -> PresetsPanel(state, actions)
                 EditorTool.TEXT -> TextPanel(state.recipe, actions)
                 EditorTool.CROP -> CropPanel(state, actions)
             }
@@ -673,13 +840,6 @@ private fun Glyph(name: String, tint: Color, modifier: Modifier = Modifier) {
 
 private fun formatPercent(value: Float): String = (value * 100f).roundToInt().let { if (it > 0) "+$it" else "$it" }
 private fun formatDecimal(value: Float): String = String.format(Locale.ROOT, if (value > .001f) "+%.1f" else "%.1f", value)
-private fun fitRect(size: IntSize, width: Int, height: Int): Rect {
-    if (size.width <= 0 || size.height <= 0 || width <= 0 || height <= 0) return Rect.Zero
-    val scale = min(size.width.toFloat() / width, size.height.toFloat() / height)
-    val w = width * scale; val h = height * scale
-    return Rect((size.width - w) / 2f, (size.height - h) / 2f, (size.width + w) / 2f, (size.height + h) / 2f)
-}
-
 private fun watermarkRect(frame: Rect, recipe: EditRecipe): Rect {
     val mark = recipe.watermark
     val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = min(frame.width, frame.height) * mark.sizeFraction; typeface = android.graphics.Typeface.DEFAULT }
