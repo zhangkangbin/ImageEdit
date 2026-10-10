@@ -4,6 +4,14 @@
 
 ## 未发布
 
+### 2026-10-09 · 编辑操作与预览布局优化
+
+- 编辑工作区与工具面板（`app/src/main/java/com/kang/imageeditapp/ui/ImageEditorApp.kt`）：使用 56dp 顶栏、64dp 底部工具栏，窄屏参数面板限制为最多 240dp 且不超过可用编辑区高度的 44%，按像素向下取整保证至少 56% 预览空间，图片画布留白缩至 12dp；宽度至少 600dp 时改为左侧工具栏、中央图片和右侧 280dp 参数面板。窄屏可收起到 48dp 标题栏，侧栏可收起到 56dp。直方图改为可关闭的浮动卡片，图片信息和提示改为浮层；横屏入口移到顶栏，较矮预览区隐藏辅助文字。
+- 支持手动收起、展开工具参数面板及再次点击当前工具切换面板显示；收起保留未应用的编辑和参数选择，不触发应用或取消。调色与 HSL 改为参数选择配合单条滑杆，保留各项调整、单项重置、全部调色重置和手势级撤销。曲线绘图区为 144dp，预设与裁剪内容可滚动。文字改为独立输入窗口，保留多行及 240 字符限制；确认形成一步撤销，取消保留原文字，紧凑输入布局保证确认/取消在真实键盘上方。
+- 查看状态（`app/src/main/java/com/kang/imageeditapp/ui/PreviewViewport.kt`）：将适配与手动查看状态独立保存，普通工具切换、面板展开或收起及布局尺寸变化保持 100% 或手动查看的实际像素倍率与图片中心，平移按图片边界约束；适配模式随可用区域调整。普通编辑和裁剪分别保存视口，支持 Activity 重建恢复，保留原图区域高清解码及双指只改变查看状态的行为。
+- 回归测试与说明（`PreviewViewportTest`、`EditorLayoutUiTest`、`EditorUiTest`、`EditorV11UiTest`、`EditorV12UiTest`、README 及 `docs/VALIDATION.md`）：新增 8 项视口单元测试及 6 项布局交互设备测试，覆盖倍率重映射、适配与手动状态、视口恢复、面板收起与工具切换、单参数滑杆及文字确认/取消；更新原有工具操作测试适配新入口。
+- 验证：`assembleDebug assembleDebugAndroidTest testDebugUnitTest lintDebug` 成功，43 项 JVM 测试全部通过，其中 `PreviewViewportTest` 为 13 项；Lint 0 错误、12 条警告。API 31、API 36 最终全套设备测试各 76/76 通过，耗时分别为 146.963 秒、170.945 秒；两台模拟器的 360×640dp 竖屏和 640×360dp 横屏各 6/6 布局测试通过，保存布局、真实键盘截图及原生窗口/按钮/键盘坐标。Debug APK 的 `apksigner verify --verbose` 与 `zipalign -c -P 16 4` 通过。README、验证说明、CHANGELOG 的内容和链接核对及 `git diff --check` 通过。详见 [验证说明](docs/VALIDATION.md)。
+
 ### 2026-10-09
 
 - Release 签名与 R8 打包（`app/build.gradle.kts`、`app/proguard-rules.pro`、`.gitignore`、`keystore.properties.example`、README 及 `docs/RELEASE_VALIDATION.md`）：新建本机 RSA 4096 位 Release 密钥，随机密码写入被忽略的本机配置；Release 启用 R8 full mode 的代码压缩、优化、混淆与资源压缩，使用优化版默认规则和依赖自带保留规则。版本保持 1.2.0 / versionCode 3。

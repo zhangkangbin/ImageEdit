@@ -110,6 +110,12 @@ class EditorV11UiTest {
         }
     }
 
+    private fun clickTool(tag: String) {
+        val node = compose.onNodeWithTag("tool-$tag")
+        if (compose.activity.resources.configuration.screenWidthDp >= 600) node.performScrollTo()
+        node.assertIsDisplayed().performClick()
+    }
+
     @Test fun homepageResumesAppliedDraftAndDeletesIt() {
         importFixture()
         compose.runOnIdle {
@@ -198,7 +204,7 @@ class EditorV11UiTest {
     @Test fun watermarkAndCropDragUseZoomedImageCoordinates() {
         importFixture()
         compose.runOnIdle { model.updateRecipe(model.state.value.recipe.copy(watermark = Watermark(text = "中文水印", x = .5f, y = .5f))) }
-        compose.onNodeWithTag("tool-text").performClick()
+        clickTool("text")
         awaitPreview()
         compose.onNodeWithTag("zoom-native").performClick()
         awaitDetail()
@@ -206,7 +212,7 @@ class EditorV11UiTest {
         assertEquals(.55f, model.state.value.recipe.watermark.x, .012f)
         assertEquals(.5f + 40f / 1200, model.state.value.recipe.watermark.y, .012f)
         compose.onNodeWithTag("apply-tool").performClick()
-        compose.onNodeWithTag("tool-crop").performClick()
+        clickTool("crop")
         compose.runOnIdle { model.updateRecipe(model.state.value.recipe.copy(crop = CropRect(.25f, .25f, .75f, .75f))) }
         awaitPreview()
         compose.onNodeWithTag("zoom-native").performClick()

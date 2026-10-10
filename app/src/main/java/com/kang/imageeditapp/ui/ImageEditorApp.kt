@@ -32,7 +32,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.displayCutout
+import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
@@ -55,19 +57,23 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
+import androidx.compose.runtime.saveable.SaveableStateHolder
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.geometry.Size
@@ -87,6 +93,8 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -97,6 +105,11 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.DialogWindowProvider
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kang.imageeditapp.EditorActions
@@ -151,8 +164,8 @@ fun ImageEditorApp(state: EditorUiState, actions: EditorActions) {
             }
         }
         Surface(color = Ink, modifier = Modifier.fillMaxSize()) {
-            BoxWithConstraints(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing).imePadding()) {
-                val wide = maxWidth > maxHeight
+            BoxWithConstraints(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout))) {
+                val sideLayout = maxWidth >= 600.dp
                 Column(Modifier.fillMaxSize()) {
                     if (state.source == null) {
                         EmptyEditor(state, actions, { deleteDraftDialog = true })
@@ -163,31 +176,13 @@ fun ImageEditorApp(state: EditorUiState, actions: EditorActions) {
                         }, {
                             focus.clearFocus()
                             closeDialog = true
+                        }, analysisControls = {
+                            if (sideLayout) {
+                                TextButton(onClick = { histogramExpanded = !histogramExpanded }, modifier = Modifier.height(48.dp).testTag("toggle-histogram")) { Text("直方图", fontSize = 11.sp, color = if (histogramExpanded) Accent else Muted) }
+                                TextButton(onClick = { clippingEnabled = !clippingEnabled }, modifier = Modifier.height(48.dp).testTag("toggle-clipping").semantics { contentDescription = "溢出提示${if (clippingEnabled) "开启" else "关闭"}" }) { Text("溢出", fontSize = 11.sp, color = if (clippingEnabled) Accent else Muted) }
+                            }
                         })
-                        AnalysisPanel(state.analysis, histogramExpanded, { histogramExpanded = !histogramExpanded }, clippingEnabled, { clippingEnabled = !clippingEnabled })
-                        state.notice?.let { notice ->
-                            Row(Modifier.fillMaxWidth().background(Raised).padding(start = 20.dp, end = 8.dp).testTag("operation-notice"), verticalAlignment = Alignment.CenterVertically) {
-                                Text(notice, modifier = Modifier.weight(1f), color = Accent, fontSize = 12.sp)
-                                TextButton(onClick = actions::dismissNotice, modifier = Modifier.testTag("dismiss-notice")) { Text("关闭", color = Muted, fontSize = 12.sp) }
-                            }
-                        }
-                        if (wide && state.activeTool != null) {
-                            Row(Modifier.weight(1f).fillMaxWidth()) {
-                                PreviewStage(state, actions, comparing, clippingEnabled, Modifier.weight(1f).fillMaxHeight())
-                                Box(Modifier.width(320.dp).fillMaxHeight().background(Panel)) {
-                                    ToolPanel(state.activeTool, state, actions, { focus.clearFocus(); actions.applyTool() }, { focus.clearFocus(); actions.cancelTool() })
-                                }
-                            }
-                        } else {
-                            PreviewStage(state, actions, comparing, clippingEnabled, Modifier.weight(1f).fillMaxWidth())
-                            state.activeTool?.let { tool ->
-                                ToolPanel(tool, state, actions, { focus.clearFocus(); actions.applyTool() }, { focus.clearFocus(); actions.cancelTool() })
-                            }
-                        }
-                        ToolNavigation(state.activeTool, !state.isLoading && !state.isExporting) {
-                            focus.clearFocus()
-                            actions.selectTool(it)
-                        }
+                        EditorWorkspace(state, actions, comparing, histogramExpanded, { histogramExpanded = !histogramExpanded }, clippingEnabled, { clippingEnabled = !clippingEnabled }, Modifier.weight(1f))
                     }
                 }
             }
@@ -224,6 +219,70 @@ fun ImageEditorApp(state: EditorUiState, actions: EditorActions) {
                     Text("已保存到相册的 ImageEditApp 文件夹。现在可以分享你的作品。")
                 }
             }, confirmButton = { TextButton(onClick = actions::shareSaved, modifier = Modifier.testTag("share-photo")) { Text("分享图片") } }, dismissButton = { TextButton(onClick = actions::dismissSaved) { Text("完成") } }, containerColor = Panel)
+        }
+    }
+}
+
+@Composable
+private fun EditorWorkspace(
+    state: EditorUiState, actions: EditorActions, comparing: Boolean,
+    histogramExpanded: Boolean, toggleHistogram: () -> Unit,
+    clippingEnabled: Boolean, toggleClipping: () -> Unit, modifier: Modifier,
+) {
+    val source = state.source ?: return
+    val recipe = state.recipe
+    LaunchedEffect(source.localPath) {
+        if (CropAspect.sourcePath != source.localPath) {
+            CropAspect.sourcePath = source.localPath
+            CropAspect.selected = "自由"
+        }
+    }
+    val focus = LocalFocusManager.current
+    var collapsed by rememberSaveable(source.localPath) { mutableStateOf(false) }
+    var previousTool by rememberSaveable(source.localPath) { mutableStateOf(state.activeTool) }
+    val toolStates = rememberSaveableStateHolder()
+    val normalViewport = rememberSaveable(source.localPath, recipe.quarterTurns, recipe.flipHorizontal, recipe.flipVertical, recipe.crop, saver = PreviewViewportState.Saver) { PreviewViewportState() }
+    val cropViewport = rememberSaveable(source.localPath, recipe.quarterTurns, recipe.flipHorizontal, recipe.flipVertical, saver = PreviewViewportState.Saver) { PreviewViewportState() }
+    LaunchedEffect(state.activeTool) {
+        if (state.activeTool != previousTool && state.activeTool != null) collapsed = false
+        previousTool = state.activeTool
+    }
+    val select: (EditorTool) -> Unit = { tool ->
+        focus.clearFocus()
+        if (state.activeTool == tool) collapsed = !collapsed else {
+            collapsed = false
+            actions.selectTool(tool)
+        }
+    }
+    val apply = { focus.clearFocus(); actions.applyTool() }
+    val cancel = { focus.clearFocus(); actions.cancelTool() }
+    BoxWithConstraints(modifier.fillMaxWidth()) {
+        val wide = maxWidth >= 600.dp
+        if (wide) {
+            Row(Modifier.fillMaxSize().testTag("editor-workspace")) {
+                ToolNavigation(state.activeTool, !state.isLoading && !state.isExporting, select, vertical = true)
+                PreviewStage(state, actions, comparing, clippingEnabled, normalViewport, cropViewport, histogramExpanded, toggleHistogram, toggleClipping, true, Modifier.weight(1f).fillMaxHeight())
+                state.activeTool?.let { tool ->
+                    ToolPanel(tool, state, actions, apply, cancel, collapsed, { collapsed = !collapsed }, true, toolStates, Modifier.width(if (collapsed) 56.dp else 280.dp).fillMaxHeight())
+                }
+            }
+        } else {
+            Column(Modifier.fillMaxSize()) {
+                BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+                    val density = LocalDensity.current
+                    // Round the panel budget down in pixels so the preview always retains at least 56%.
+                    val panelHeight = if (collapsed) 48.dp else with(density) {
+                        min(240.dp.toPx(), maxHeight.toPx() * .44f).toInt().toDp()
+                    }
+                    Column(Modifier.fillMaxSize().testTag("editor-workspace")) {
+                        PreviewStage(state, actions, comparing, clippingEnabled, normalViewport, cropViewport, histogramExpanded, toggleHistogram, toggleClipping, false, Modifier.weight(1f).fillMaxWidth())
+                        state.activeTool?.let { tool ->
+                            ToolPanel(tool, state, actions, apply, cancel, collapsed, { collapsed = !collapsed }, false, toolStates, Modifier.fillMaxWidth().height(panelHeight))
+                        }
+                    }
+                }
+                ToolNavigation(state.activeTool, !state.isLoading && !state.isExporting, select)
+            }
         }
     }
 }
@@ -298,14 +357,15 @@ private fun EmptyEditor(state: EditorUiState, actions: EditorActions, deleteDraf
 }
 
 @Composable
-private fun EditorHeader(state: EditorUiState, actions: EditorActions, comparing: Boolean, setComparing: (Boolean) -> Unit, export: () -> Unit, close: () -> Unit) {
+private fun EditorHeader(state: EditorUiState, actions: EditorActions, comparing: Boolean, setComparing: (Boolean) -> Unit, export: () -> Unit, close: () -> Unit, analysisControls: @Composable () -> Unit) {
     val focus = LocalFocusManager.current
-    Row(Modifier.fillMaxWidth().height(65.dp).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         IconAction("back", "结束编辑", onClick = close)
         Text("编辑 ▾", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f).clip(RoundedCornerShape(8.dp)).clickable(enabled = !state.isLoading && !state.isExporting) { focus.clearFocus(); actions.importPhoto() }.padding(start = 4.dp, top = 8.dp, bottom = 8.dp).testTag("replace-photo").semantics { contentDescription = "更换图片" }, maxLines = 1)
+        analysisControls()
         IconAction("undo", "撤销", enabled = state.canUndo) { focus.clearFocus(); actions.undo() }
         IconAction("redo", "重做", enabled = state.canRedo) { focus.clearFocus(); actions.redo() }
-        Box(Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(if (comparing) Accent.copy(alpha = .14f) else Color.Transparent).testTag("compare").semantics { contentDescription = "按住查看原图" }.pointerInput(Unit) {
+        Box(Modifier.size(48.dp).clip(RoundedCornerShape(12.dp)).background(if (comparing) Accent.copy(alpha = .14f) else Color.Transparent).testTag("compare").semantics { contentDescription = "按住查看原图" }.pointerInput(Unit) {
             awaitEachGesture {
                 awaitFirstDown(requireUnconsumed = false)
                 setComparing(true)
@@ -317,12 +377,12 @@ private fun EditorHeader(state: EditorUiState, actions: EditorActions, comparing
 }
 
 @Composable
-private fun AnalysisPanel(analysis: PreviewAnalysis?, expanded: Boolean, toggleExpanded: () -> Unit, clipping: Boolean, toggleClipping: () -> Unit) {
+private fun AnalysisPanel(analysis: PreviewAnalysis?, expanded: Boolean, toggleExpanded: () -> Unit, clipping: Boolean, toggleClipping: () -> Unit, headerControls: Boolean = false) {
     var luminanceOnly by remember { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth().background(Panel)) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text(if (expanded) "直方图 ▴" else "直方图 ▾", color = if (expanded) Accent else Muted, fontSize = 12.sp, modifier = Modifier.weight(1f).clip(RoundedCornerShape(8.dp)).clickable(onClick = toggleExpanded).padding(vertical = 7.dp).testTag("toggle-histogram"))
-            ChoiceChip("溢出提示${if (clipping) " · 开" else ""}", clipping, toggleClipping, Modifier.testTag("toggle-clipping"))
+            Text(if (expanded) "直方图 ▴" else "直方图 ▾", color = if (expanded) Accent else Muted, fontSize = 12.sp, modifier = Modifier.weight(1f).clip(RoundedCornerShape(8.dp)).clickable(onClick = toggleExpanded).padding(vertical = 7.dp).testTag(if (headerControls) "close-histogram" else "toggle-histogram"))
+            if (!headerControls) ChoiceChip("溢出提示${if (clipping) " · 开" else ""}", clipping, toggleClipping, Modifier.testTag("toggle-clipping"))
         }
         if (expanded) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 18.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -361,30 +421,45 @@ private fun AnalysisPanel(analysis: PreviewAnalysis?, expanded: Boolean, toggleE
 }
 
 @Composable
-private fun PreviewStage(state: EditorUiState, actions: EditorActions, comparing: Boolean, clipping: Boolean, modifier: Modifier = Modifier) {
+private fun PreviewStage(
+    state: EditorUiState, actions: EditorActions, comparing: Boolean, clipping: Boolean,
+    normalViewport: PreviewViewportState, cropViewport: PreviewViewportState,
+    histogramExpanded: Boolean, toggleHistogram: () -> Unit, toggleClipping: () -> Unit,
+    sideLayout: Boolean,
+    modifier: Modifier = Modifier,
+) {
     val cropMode = state.activeTool == EditorTool.CROP && !comparing
     val bitmap = when { comparing -> state.originalPreview; cropMode -> state.fullPreview; else -> state.preview }
     val source = state.source ?: return
     val output = Geometry.outputSize(source, state.recipe)
-    Box(modifier.background(Color(0xFF0B0E10))) {
+    BoxWithConstraints(modifier.background(Color(0xFF0B0E10)).clipToBounds().testTag("preview-stage")) {
         if (bitmap != null) {
-            PhotoCanvas(bitmap, state, actions, cropMode, !comparing && state.activeTool == EditorTool.TEXT, comparing, clipping && !comparing, Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 38.dp))
+            PhotoCanvas(bitmap, state, actions, cropMode, !comparing && state.activeTool == EditorTool.TEXT, comparing, clipping && !comparing, if (cropMode) cropViewport else normalViewport, Modifier.fillMaxSize().padding(12.dp))
         } else {
             CircularProgressIndicator(Modifier.align(Alignment.Center).size(28.dp), color = Accent, strokeWidth = 2.dp)
         }
-        Row(Modifier.align(Alignment.TopCenter).padding(top = 9.dp).clip(RoundedCornerShape(20.dp)).background(Ink.copy(alpha = .8f)).padding(horizontal = 12.dp, vertical = 5.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (!sideLayout || maxHeight >= 240.dp) Row(Modifier.align(if (sideLayout) Alignment.TopStart else Alignment.BottomStart).padding(start = 12.dp, top = if (sideLayout) 8.dp else 0.dp, bottom = if (sideLayout) 0.dp else 56.dp).clip(RoundedCornerShape(12.dp)).background(Ink.copy(alpha = .8f)).padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             Box(Modifier.size(5.dp).background(if (comparing) Color.White else Accent, CircleShape))
-            Text(if (comparing) "原图" else "${output.width} × ${output.height}", fontSize = 11.sp, color = Color(0xFFC6D0D5))
+            Text(if (comparing) "原图" else "${output.width} × ${output.height}", fontSize = 10.sp, color = Color(0xFFC6D0D5), maxLines = 1)
+        }
+        if (!sideLayout || histogramExpanded) Box(Modifier.align(Alignment.TopStart).padding(8.dp).widthIn(max = 320.dp).fillMaxWidth().heightIn(max = (maxHeight - 16.dp).coerceAtLeast(0.dp)).clip(RoundedCornerShape(12.dp)).verticalScroll(rememberScrollState())) {
+            AnalysisPanel(state.analysis, histogramExpanded, toggleHistogram, clipping, toggleClipping, sideLayout)
         }
         if (state.isRendering) {
             CircularProgressIndicator(Modifier.align(Alignment.TopEnd).padding(14.dp).size(14.dp), color = Accent, strokeWidth = 1.5.dp)
         }
-        Text(when { comparing -> "松开返回编辑效果"; cropMode -> "单指调整裁剪 · 双指缩放查看"; state.activeTool == EditorTool.TEXT && state.recipe.watermark.text.isNotBlank() -> "拖动文字 · 双指缩放查看"; else -> "双指缩放与平移 · 双击查看 100%" }, color = Muted, fontSize = 11.sp, modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp))
+        if (!sideLayout) Text(when { comparing -> "松开返回编辑效果"; cropMode -> "单指调整裁剪 · 双指缩放查看"; state.activeTool == EditorTool.TEXT && state.recipe.watermark.text.isNotBlank() -> "拖动文字 · 双指缩放查看"; else -> "双指缩放与平移 · 双击查看 100%" }, color = Muted, fontSize = 10.sp, modifier = Modifier.align(Alignment.BottomStart).padding(start = 12.dp, bottom = 90.dp).clip(RoundedCornerShape(6.dp)).background(Ink.copy(alpha = .72f)).padding(horizontal = 6.dp, vertical = 3.dp))
+        state.notice?.let { notice ->
+            Row(Modifier.align(Alignment.BottomCenter).padding(start = 12.dp, end = 12.dp, bottom = 90.dp).clip(RoundedCornerShape(12.dp)).background(Raised).padding(start = 12.dp, end = 4.dp).testTag("operation-notice"), verticalAlignment = Alignment.CenterVertically) {
+                Text(notice, modifier = Modifier.weight(1f), color = Accent, fontSize = 12.sp)
+                TextButton(onClick = actions::dismissNotice, modifier = Modifier.testTag("dismiss-notice")) { Text("关闭", color = Muted, fontSize = 12.sp) }
+            }
+        }
     }
 }
 
 @Composable
-private fun PhotoCanvas(bitmap: Bitmap, state: EditorUiState, actions: EditorActions, cropMode: Boolean, textMode: Boolean, comparing: Boolean, clipping: Boolean, modifier: Modifier) {
+private fun PhotoCanvas(bitmap: Bitmap, state: EditorUiState, actions: EditorActions, cropMode: Boolean, textMode: Boolean, comparing: Boolean, clipping: Boolean, viewportState: PreviewViewportState, modifier: Modifier) {
     var frameSize by remember { mutableStateOf(IntSize.Zero) }
     val latestRecipe by rememberUpdatedState(state.recipe)
     val latestActions by rememberUpdatedState(actions)
@@ -392,9 +467,8 @@ private fun PhotoCanvas(bitmap: Bitmap, state: EditorUiState, actions: EditorAct
     val source = state.source ?: return
     val transformed = Geometry.transformedSize(source, state.recipe)
     val imageSize = if (cropMode) transformed else Geometry.outputSize(source, state.recipe)
-    val recipe = state.recipe
-    var viewport by remember(source.localPath, cropMode, recipe.quarterTurns, recipe.flipHorizontal, recipe.flipVertical, if (cropMode) null else recipe.crop) { mutableStateOf(PreviewViewport()) }
     val geometry = ViewportGeometry(frameSize.width, frameSize.height, imageSize.width, imageSize.height)
+    val viewport = viewportState.viewportFor(geometry)
     val density = LocalDensity.current.density
     val frameGeometry = geometry.frame(viewport)
     val frame = Rect(frameGeometry.left, frameGeometry.top, frameGeometry.right, frameGeometry.bottom)
@@ -410,12 +484,15 @@ private fun PhotoCanvas(bitmap: Bitmap, state: EditorUiState, actions: EditorAct
     }
     val baseOverlay = if (cropMode) state.fullPreviewOverlay else state.previewOverlay
     val detail = state.detail?.takeIf { it.cropMode == cropMode && it.comparing == comparing }
-    Box(modifier.clipToBounds().onSizeChanged { frameSize = it }.testTag("photo-canvas").semantics { contentDescription = "图片预览，可双指缩放、平移及双击查看原始像素" }.pointerInput(geometry, cropMode, textMode) {
+    Box(modifier.clipToBounds().onSizeChanged { frameSize = it }.testTag("photo-canvas").semantics { contentDescription = "图片预览，可双指缩放、平移及双击查看原始像素" }.pointerInput(geometry, cropMode, textMode, viewportState) {
         var lastTapTime = 0L
         var lastTapAt = Offset.Zero
+        fun moveViewport(next: PreviewViewport) {
+            if (next != viewportState.viewportFor(geometry)) viewportState.update(next, geometry)
+        }
         awaitEachGesture {
-            val down = awaitFirstDown(requireUnconsumed = false)
-            val startViewport = viewport
+            val down = awaitFirstDown()
+            val startViewport = viewportState.viewportFor(geometry)
             val startRecipe = latestRecipe
             val f = geometry.frame(startViewport)
             val startFrame = Rect(f.left, f.top, f.right, f.bottom)
@@ -436,11 +513,12 @@ private fun PhotoCanvas(bitmap: Bitmap, state: EditorUiState, actions: EditorAct
                         multiple = true; moved = true
                         val center = event.calculateCentroid(useCurrent = false)
                         val pan = event.calculatePan()
-                        viewport = geometry.transform(viewport, event.calculateZoom(), pan.x, pan.y, center.x, center.y)
+                        moveViewport(geometry.transform(viewportState.viewportFor(geometry), event.calculateZoom(), pan.x, pan.y, center.x, center.y))
                         event.changes.forEach { it.consume() }
                     } else if (multiple) {
                         val pan = event.calculatePan()
-                        viewport = geometry.constrain(viewport.copy(panX = viewport.panX + pan.x, panY = viewport.panY + pan.y))
+                        val current = viewportState.viewportFor(geometry)
+                        moveViewport(geometry.constrain(current.copy(panX = current.panX + pan.x, panY = current.panY + pan.y), preserveScale = true))
                         event.changes.forEach { it.consume() }
                     } else {
                         val change = event.changes.firstOrNull { it.id == down.id } ?: event.changes.first()
@@ -457,7 +535,7 @@ private fun PhotoCanvas(bitmap: Bitmap, state: EditorUiState, actions: EditorAct
                                     latestActions.updateRecipe(latestRecipe.copy(watermark = mark.copy(x = (mark.x + total.x / startFrame.width).coerceIn(0f, 1f), y = (mark.y + total.y / startFrame.height).coerceIn(0f, 1f))))
                                 }
                             } else {
-                                viewport = geometry.constrain(startViewport.copy(panX = startViewport.panX + total.x, panY = startViewport.panY + total.y))
+                                moveViewport(geometry.constrain(startViewport.copy(panX = startViewport.panX + total.x, panY = startViewport.panY + total.y), preserveScale = true))
                             }
                             change.consume()
                         }
@@ -466,7 +544,8 @@ private fun PhotoCanvas(bitmap: Bitmap, state: EditorUiState, actions: EditorAct
             } finally { if (editing) latestActions.endGesture() }
             if (!moved && finalTime - down.uptimeMillis < viewConfiguration.longPressTimeoutMillis) {
                 if (down.uptimeMillis - lastTapTime in viewConfiguration.doubleTapMinTimeMillis..viewConfiguration.doubleTapTimeoutMillis && (down.position - lastTapAt).getDistance() < 40f * density) {
-                    viewport = if (abs(viewport.zoom - geometry.nativeZoom) < .03f) PreviewViewport() else geometry.transform(viewport, geometry.nativeZoom / viewport.zoom, 0f, 0f, down.position.x, down.position.y)
+                    val current = viewportState.viewportFor(geometry)
+                    if (abs(current.zoom - geometry.nativeZoom) < .03f) viewportState.fit() else viewportState.update(geometry.transform(current, geometry.nativeZoom / current.zoom, 0f, 0f, down.position.x, down.position.y), geometry)
                     lastTapTime = 0L
                 } else { lastTapTime = finalTime; lastTapAt = down.position }
             } else lastTapTime = 0L
@@ -506,42 +585,66 @@ private fun PhotoCanvas(bitmap: Bitmap, state: EditorUiState, actions: EditorAct
         }
         Row(Modifier.align(Alignment.BottomEnd).padding(6.dp).clip(RoundedCornerShape(11.dp)).background(Ink.copy(alpha = .86f)).padding(3.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("${(geometry.fitScale * viewport.zoom * 100f).roundToInt()}%", color = Muted, fontSize = 10.sp, modifier = Modifier.padding(horizontal = 7.dp).testTag("zoom-percent"))
-            TextButton(onClick = { viewport = PreviewViewport() }, contentPadding = PaddingValues(horizontal = 7.dp), modifier = Modifier.height(30.dp).testTag("zoom-fit")) { Text("适配", color = if (abs(viewport.zoom - 1f) < .01f) Accent else Muted, fontSize = 11.sp) }
-            TextButton(onClick = { viewport = geometry.constrain(PreviewViewport(geometry.nativeZoom)) }, contentPadding = PaddingValues(horizontal = 7.dp), modifier = Modifier.height(30.dp).testTag("zoom-native")) { Text("100%", color = if (abs(viewport.zoom - geometry.nativeZoom) < .01f) Accent else Muted, fontSize = 11.sp) }
+            TextButton(onClick = { viewportState.fit() }, contentPadding = PaddingValues(horizontal = 7.dp), modifier = Modifier.height(30.dp).testTag("zoom-fit")) { Text("适配", color = if (viewportState.mode == PreviewViewportMode.FIT) Accent else Muted, fontSize = 11.sp) }
+            TextButton(onClick = { viewportState.update(geometry.constrain(PreviewViewport(geometry.nativeZoom)), geometry) }, contentPadding = PaddingValues(horizontal = 7.dp), modifier = Modifier.height(30.dp).testTag("zoom-native")) { Text("100%", color = if (abs(viewport.zoom - geometry.nativeZoom) < .01f) Accent else Muted, fontSize = 11.sp) }
         }
     }
 }
 
 @Composable
-private fun ToolNavigation(active: EditorTool?, enabled: Boolean, select: (EditorTool) -> Unit) {
-    Row(Modifier.fillMaxWidth().background(Panel).padding(horizontal = 8.dp, vertical = 10.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
-        EditorTool.entries.forEach { tool ->
-            val selected = active == tool
-            Column(Modifier.weight(1f).clip(RoundedCornerShape(12.dp)).background(if (selected) Accent.copy(alpha = .1f) else Color.Transparent).testTag("tool-${tool.name.lowercase(Locale.ROOT)}").clickable(enabled = enabled) { select(tool) }.padding(vertical = 9.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                Glyph(when (tool) { EditorTool.ADJUST -> "adjust"; EditorTool.CURVES -> "curve"; EditorTool.HSL -> "color"; EditorTool.PRESETS -> "preset"; EditorTool.TEXT -> "text"; EditorTool.CROP -> "crop" }, if (selected) Accent else Muted, Modifier.size(23.dp))
-                Text(ToolNames.getValue(tool), fontSize = 11.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal, color = if (selected) Accent else Muted)
+private fun ToolNavigation(active: EditorTool?, enabled: Boolean, select: (EditorTool) -> Unit, vertical: Boolean = false) {
+    if (vertical) {
+        Column(Modifier.width(64.dp).fillMaxHeight().background(Panel).verticalScroll(rememberScrollState()).padding(4.dp)) {
+            EditorTool.entries.forEach { tool ->
+                ToolNavigationItem(tool, active == tool, enabled, select, Modifier.fillMaxWidth().height(56.dp))
+            }
+        }
+    } else {
+        Row(Modifier.fillMaxWidth().height(64.dp).background(Panel).padding(horizontal = 4.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
+            EditorTool.entries.forEach { tool ->
+                ToolNavigationItem(tool, active == tool, enabled, select, Modifier.weight(1f).fillMaxHeight())
             }
         }
     }
 }
 
 @Composable
-private fun ToolPanel(tool: EditorTool, state: EditorUiState, actions: EditorActions, apply: () -> Unit, cancel: () -> Unit) {
-    Column(Modifier.fillMaxWidth().background(Panel)) {
-        Box(Modifier.fillMaxWidth().height(1.dp).background(Divider.copy(alpha = .5f)))
-        Row(Modifier.fillMaxWidth().height(48.dp).padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = cancel, contentPadding = PaddingValues(8.dp), modifier = Modifier.testTag("cancel-tool")) { Text("取消", color = Muted, fontSize = 13.sp) }
-            Text(ToolNames.getValue(tool), Modifier.weight(1f), textAlign = TextAlign.Center, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-            TextButton(onClick = apply, contentPadding = PaddingValues(8.dp), modifier = Modifier.testTag("apply-tool")) { Text("应用", color = Accent, fontSize = 13.sp, fontWeight = FontWeight.SemiBold) }
+private fun ToolNavigationItem(tool: EditorTool, selected: Boolean, enabled: Boolean, select: (EditorTool) -> Unit, modifier: Modifier) {
+    Column(modifier.clip(RoundedCornerShape(12.dp)).background(if (selected) Accent.copy(alpha = .1f) else Color.Transparent).testTag("tool-${tool.name.lowercase(Locale.ROOT)}").clickable(enabled = enabled) { select(tool) }, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(3.dp, Alignment.CenterVertically)) {
+        Glyph(when (tool) { EditorTool.ADJUST -> "adjust"; EditorTool.CURVES -> "curve"; EditorTool.HSL -> "color"; EditorTool.PRESETS -> "preset"; EditorTool.TEXT -> "text"; EditorTool.CROP -> "crop" }, if (selected) Accent else Muted, Modifier.size(22.dp))
+        Text(ToolNames.getValue(tool), fontSize = 11.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal, color = if (selected) Accent else Muted)
+    }
+}
+
+@Composable
+private fun ToolPanel(
+    tool: EditorTool, state: EditorUiState, actions: EditorActions, apply: () -> Unit, cancel: () -> Unit,
+    collapsed: Boolean, toggle: () -> Unit, side: Boolean, stateHolder: SaveableStateHolder, modifier: Modifier,
+) {
+    if (side && collapsed) {
+        Column(modifier.background(Panel).testTag("tool-panel").verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
+            TextButton(onClick = toggle, contentPadding = PaddingValues(2.dp), modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp).testTag("toggle-tool-panel").semantics { contentDescription = "展开工具面板" }) { Text("${ToolNames.getValue(tool)}\n展开", fontSize = 11.sp, textAlign = TextAlign.Center) }
+            TextButton(onClick = cancel, contentPadding = PaddingValues(2.dp), modifier = Modifier.fillMaxWidth().height(48.dp).testTag("cancel-tool")) { Text("取消", color = Muted, fontSize = 12.sp) }
+            TextButton(onClick = apply, contentPadding = PaddingValues(2.dp), modifier = Modifier.fillMaxWidth().height(48.dp).testTag("apply-tool")) { Text("应用", color = Accent, fontSize = 12.sp) }
         }
-        Box(Modifier.fillMaxWidth().heightIn(max = if (tool == EditorTool.CURVES) 248.dp else 238.dp)) {
-            when (tool) {
-                EditorTool.ADJUST -> AdjustPanel(state.recipe, actions)
-                EditorTool.CURVES -> CurvesPanel(state.recipe, actions)
-                EditorTool.HSL -> HslPanel(state.recipe, actions)
-                EditorTool.PRESETS -> PresetsPanel(state, actions)
-                EditorTool.TEXT -> TextPanel(state.recipe, actions)
-                EditorTool.CROP -> CropPanel(state, actions)
+    } else {
+        Column(modifier.background(Panel).testTag("tool-panel")) {
+            Row(Modifier.fillMaxWidth().height(48.dp).padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = cancel, contentPadding = PaddingValues(4.dp), modifier = Modifier.height(48.dp).testTag("cancel-tool")) { Text("取消", color = Muted, fontSize = 13.sp) }
+                TextButton(onClick = toggle, contentPadding = PaddingValues(4.dp), modifier = Modifier.weight(1f).height(48.dp).testTag("toggle-tool-panel").semantics { contentDescription = if (collapsed) "展开工具面板" else "收起工具面板" }) { Text("${ToolNames.getValue(tool)} ${if (collapsed) "▾" else "▴"}", fontSize = 14.sp, fontWeight = FontWeight.SemiBold) }
+                TextButton(onClick = apply, contentPadding = PaddingValues(4.dp), modifier = Modifier.height(48.dp).testTag("apply-tool")) { Text("应用", color = Accent, fontSize = 13.sp, fontWeight = FontWeight.SemiBold) }
+            }
+            if (!collapsed) Box(Modifier.weight(1f).fillMaxWidth()) {
+                stateHolder.SaveableStateProvider("${state.source?.localPath}:${tool.name}") {
+                    when (tool) {
+                        EditorTool.ADJUST -> AdjustPanel(state.recipe, actions)
+                        EditorTool.CURVES -> CurvesPanel(state.recipe, actions)
+                        EditorTool.HSL -> HslPanel(state.recipe, actions)
+                        EditorTool.PRESETS -> PresetsPanel(state, actions)
+                        EditorTool.TEXT -> TextPanel(state.recipe, actions)
+                        EditorTool.CROP -> CropPanel(state, actions)
+                    }
+                }
             }
         }
     }
@@ -549,17 +652,45 @@ private fun ToolPanel(tool: EditorTool, state: EditorUiState, actions: EditorAct
 
 @Composable
 private fun AdjustPanel(recipe: EditRecipe, actions: EditorActions) {
+    var selected by rememberSaveable { mutableStateOf("曝光") }
     val a = recipe.adjustments
-    Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 2.dp)) {
-        ParameterSlider("曝光", a.exposure, -2f..2f, actions, { recipe.copy(adjustments = a.copy(exposure = it)) }, "${formatDecimal(a.exposure)} EV")
-        ParameterSlider("亮度", a.brightness, -1f..1f, actions, { recipe.copy(adjustments = a.copy(brightness = it)) })
-        ParameterSlider("对比度", a.contrast, -1f..1f, actions, { recipe.copy(adjustments = a.copy(contrast = it)) })
-        ParameterSlider("饱和度", a.saturation, -1f..1f, actions, { recipe.copy(adjustments = a.copy(saturation = it)) })
-        ParameterSlider("色温", a.temperature, -1f..1f, actions, { recipe.copy(adjustments = a.copy(temperature = it)) })
-        ParameterSlider("色调", a.tint, -1f..1f, actions, { recipe.copy(adjustments = a.copy(tint = it)) })
-        ParameterSlider("阴影", a.shadows, -1f..1f, actions, { recipe.copy(adjustments = a.copy(shadows = it)) })
-        ParameterSlider("高光", a.highlights, -1f..1f, actions, { recipe.copy(adjustments = a.copy(highlights = it)) })
-        TextButton(onClick = { actions.beginGesture(); actions.updateRecipe(recipe.copy(adjustments = ColorAdjustments())); actions.endGesture() }, modifier = Modifier.align(Alignment.CenterHorizontally)) { Text("重置全部调色", color = Muted, fontSize = 12.sp) }
+    val value = when (selected) {
+        "曝光" -> a.exposure
+        "亮度" -> a.brightness
+        "对比度" -> a.contrast
+        "饱和度" -> a.saturation
+        "色温" -> a.temperature
+        "色调" -> a.tint
+        "阴影" -> a.shadows
+        else -> a.highlights
+    }
+    Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 2.dp)) {
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf("曝光", "亮度", "对比度", "饱和度", "色温", "色调", "阴影", "高光").forEach { parameter ->
+                CompactChoiceChip(parameter, selected == parameter, { selected = parameter }, Modifier.testTag("adjust-$parameter"))
+            }
+        }
+        ParameterSlider(selected, value, if (selected == "曝光") -2f..2f else -1f..1f, actions, {
+            val adjustments = when (selected) {
+                "曝光" -> a.copy(exposure = it)
+                "亮度" -> a.copy(brightness = it)
+                "对比度" -> a.copy(contrast = it)
+                "饱和度" -> a.copy(saturation = it)
+                "色温" -> a.copy(temperature = it)
+                "色调" -> a.copy(tint = it)
+                "阴影" -> a.copy(shadows = it)
+                else -> a.copy(highlights = it)
+            }
+            recipe.copy(adjustments = adjustments)
+        }, if (selected == "曝光") "${formatDecimal(value)} EV" else formatPercent(value))
+        TextButton(onClick = { actions.beginGesture(); actions.updateRecipe(recipe.copy(adjustments = ColorAdjustments())); actions.endGesture() }, modifier = Modifier.align(Alignment.CenterHorizontally).heightIn(min = 48.dp).testTag("reset-adjustments")) { Text("重置全部调色", color = Muted, fontSize = 12.sp) }
+    }
+}
+
+@Composable
+private fun CompactChoiceChip(label: String, selected: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Box(modifier.height(48.dp).widthIn(min = 48.dp).clip(RoundedCornerShape(9.dp)).background(if (selected) Accent.copy(alpha = .13f) else Raised).border(1.dp, if (selected) Accent.copy(alpha = .55f) else Color.Transparent, RoundedCornerShape(9.dp)).clickable(onClick = onClick).padding(horizontal = 12.dp), contentAlignment = Alignment.Center) {
+        Text(label, color = if (selected) Accent else Muted, fontSize = 11.sp, fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal, maxLines = 1)
     }
 }
 
@@ -568,36 +699,36 @@ private fun ParameterSlider(label: String, value: Float, range: ClosedFloatingPo
     var gesturing by remember { mutableStateOf(false) }
     val latestUpdate by rememberUpdatedState(recipeWithValue)
     val focus = LocalFocusManager.current
-    Column(Modifier.fillMaxWidth().padding(bottom = 2.dp)) {
-        Row(Modifier.fillMaxWidth().height(24.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(label, fontSize = 12.sp, color = Color(0xFFD6DFE3), modifier = Modifier.weight(1f))
-            Text(display, fontSize = 11.sp, color = if (abs(value - defaultValue) > .001f) Accent else Muted, modifier = Modifier.widthIn(min = 36.dp), textAlign = TextAlign.End)
-            Box(Modifier.padding(start = 8.dp).size(24.dp).clip(CircleShape).clickable { focus.clearFocus(); actions.beginGesture(); actions.updateRecipe(latestUpdate(defaultValue)); actions.endGesture() }.semantics { contentDescription = "重置$label" }, contentAlignment = Alignment.Center) { Glyph("reset", Muted, Modifier.size(13.dp)) }
+    Row(Modifier.fillMaxWidth().height(64.dp), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.width(64.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(label, fontSize = 12.sp, color = Color(0xFFD6DFE3))
+            Text(display, fontSize = 11.sp, color = if (abs(value - defaultValue) > .001f) Accent else Muted)
         }
         Slider(value = value.coerceIn(range.start, range.endInclusive), onValueChange = {
             if (!gesturing) { focus.clearFocus(); actions.beginGesture(); gesturing = true }
             actions.updateRecipe(latestUpdate(it))
-        }, onValueChangeFinished = { if (gesturing) { actions.endGesture(); gesturing = false } }, valueRange = range, colors = SliderDefaults.colors(thumbColor = Accent, activeTrackColor = Accent, inactiveTrackColor = Divider), modifier = Modifier.fillMaxWidth().height(29.dp).testTag("slider-$label").semantics { contentDescription = label })
+        }, onValueChangeFinished = { if (gesturing) { actions.endGesture(); gesturing = false } }, valueRange = range, colors = SliderDefaults.colors(thumbColor = Accent, activeTrackColor = Accent, inactiveTrackColor = Divider), modifier = Modifier.weight(1f).height(48.dp).testTag("slider-$label").semantics { contentDescription = label })
+        Box(Modifier.size(48.dp).clip(CircleShape).clickable { focus.clearFocus(); actions.beginGesture(); actions.updateRecipe(latestUpdate(defaultValue)); actions.endGesture() }.semantics { contentDescription = "重置$label" }, contentAlignment = Alignment.Center) { Glyph("reset", Muted, Modifier.size(16.dp)) }
     }
 }
 
 @Composable
 private fun CurvesPanel(recipe: EditRecipe, actions: EditorActions) {
-    var channel by remember { mutableStateOf(CurveChannel.RGB) }
+    var channel by rememberSaveable { mutableStateOf(CurveChannel.RGB) }
     val points = recipe.curves.points(channel)
     val latestRecipe by rememberUpdatedState(recipe)
     val latestActions by rememberUpdatedState(actions)
     val hue = when (channel) { CurveChannel.RGB -> Accent; CurveChannel.RED -> Color(0xFFFF8585); CurveChannel.GREEN -> Color(0xFF91E09C); CurveChannel.BLUE -> Color(0xFF86B9FF) }
-    Column(Modifier.padding(horizontal = 24.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+    Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(2.dp), verticalAlignment = Alignment.CenterVertically) {
             CurveChannel.entries.forEach { option ->
-                ChoiceChip(when (option) { CurveChannel.RGB -> "RGB"; CurveChannel.RED -> "R"; CurveChannel.GREEN -> "G"; CurveChannel.BLUE -> "B" }, channel == option, { channel = option }, Modifier.weight(1f).testTag("curve-${option.name}"))
+                CompactChoiceChip(when (option) { CurveChannel.RGB -> "RGB"; CurveChannel.RED -> "R"; CurveChannel.GREEN -> "G"; CurveChannel.BLUE -> "B" }, channel == option, { channel = option }, Modifier.weight(1f).testTag("curve-${option.name}"))
             }
-            IconAction("reset", "重置当前曲线", size = 32) { actions.beginGesture(); actions.updateRecipe(recipe.copy(curves = recipe.curves.withPoints(channel, listOf(CurvePoint(0f, 0f), CurvePoint(1f, 1f))))); actions.endGesture() }
+            IconAction("reset", "重置当前曲线", size = 48) { actions.beginGesture(); actions.updateRecipe(recipe.copy(curves = recipe.curves.withPoints(channel, listOf(CurvePoint(0f, 0f), CurvePoint(1f, 1f))))); actions.endGesture() }
         }
         val plotPadding = 10f * LocalDensity.current.density
         val hitRadius = 25f * LocalDensity.current.density
-        Canvas(Modifier.fillMaxWidth().height(158.dp).padding(vertical = 8.dp).clip(RoundedCornerShape(9.dp)).background(Ink).testTag("curves-canvas").pointerInput(channel) {
+        Canvas(Modifier.fillMaxWidth().padding(vertical = 4.dp).height(144.dp).clip(RoundedCornerShape(9.dp)).background(Ink).testTag("curves-canvas").pointerInput(channel) {
             awaitEachGesture {
                 val down = awaitFirstDown()
                 val width = size.width.toFloat() - 2f * plotPadding
@@ -676,63 +807,132 @@ private fun CurvesPanel(recipe: EditRecipe, actions: EditorActions) {
 
 @Composable
 private fun HslPanel(recipe: EditRecipe, actions: EditorActions) {
-    var selected by remember { mutableIntStateOf(0) }
+    var selected by rememberSaveable { mutableIntStateOf(0) }
+    var parameter by rememberSaveable { mutableStateOf("色相") }
     val names = listOf("红", "橙", "黄", "绿", "青", "蓝", "紫", "洋红")
     val colors = listOf(0xFFF36C72, 0xFFF4A45C, 0xFFE4D667, 0xFF7BC98C, 0xFF65C9C7, 0xFF6B9EDF, 0xFFA588DD, 0xFFD988C8)
     val hsl = recipe.hsl[selected]
     fun update(hue: Float = hsl.hue, saturation: Float = hsl.saturation, lightness: Float = hsl.lightness): EditRecipe = recipe.copy(hsl = recipe.hsl.mapIndexed { i, original -> if (i == selected) original.copy(hue = hue, saturation = saturation, lightness = lightness) else original })
-    Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 2.dp)) {
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(bottom = 8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 2.dp)) {
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(bottom = 4.dp), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             names.forEachIndexed { index, name ->
-                Column(Modifier.width(27.dp).testTag("hsl-$index").clickable { selected = index }, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Column(Modifier.width(48.dp).height(56.dp).clip(RoundedCornerShape(8.dp)).testTag("hsl-$index").clickable { selected = index }.semantics { contentDescription = "HSL：$name" }, horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
                     Box(Modifier.size(25.dp).border(if (selected == index) 2.dp else 0.dp, if (selected == index) Color.White else Color.Transparent, CircleShape).padding(4.dp).background(Color(colors[index]), CircleShape))
                     Text(name, color = if (selected == index) Color.White else Muted, fontSize = 10.sp, maxLines = 1)
                 }
             }
         }
-        ParameterSlider("色相", hsl.hue, -1f..1f, actions, { update(hue = it) }, "${(hsl.hue * 60f).roundToInt()}°")
-        ParameterSlider("饱和度", hsl.saturation, -1f..1f, actions, { update(saturation = it) })
-        ParameterSlider("明度", hsl.lightness, -1f..1f, actions, { update(lightness = it) })
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf("色相", "饱和度", "明度").forEach { option ->
+                CompactChoiceChip(option, parameter == option, { parameter = option }, Modifier.weight(1f).testTag("hsl-parameter-$option"))
+            }
+        }
+        val value = when (parameter) { "色相" -> hsl.hue; "饱和度" -> hsl.saturation; else -> hsl.lightness }
+        ParameterSlider(parameter, value, -1f..1f, actions, {
+            when (parameter) { "色相" -> update(hue = it); "饱和度" -> update(saturation = it); else -> update(lightness = it) }
+        }, if (parameter == "色相") "${(value * 60f).roundToInt()}°" else formatPercent(value))
     }
 }
 
 @Composable
 private fun TextPanel(recipe: EditRecipe, actions: EditorActions) {
-    var hasFocus by remember { mutableStateOf(false) }
+    var editingText by rememberSaveable { mutableStateOf(false) }
+    var draftText by rememberSaveable { mutableStateOf("") }
     val latestRecipe by rememberUpdatedState(recipe)
     val focus = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
     val colors = listOf(Color.White, Color.Black, Accent, Color(0xFFFFD782), Color(0xFFFF8E91), Color(0xFF8CB9FF), Color(0xFFD7A7F2))
     val colorNames = listOf("白色", "黑色", "薄荷绿", "暖黄色", "珊瑚红", "浅蓝色", "淡紫色")
-    Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 2.dp)) {
-        OutlinedTextField(value = recipe.watermark.text, onValueChange = { actions.updateRecipe(latestRecipe.copy(watermark = latestRecipe.watermark.copy(text = it.take(240)))) }, placeholder = { Text("写下一句心情…", color = Muted, fontSize = 13.sp) }, modifier = Modifier.fillMaxWidth().testTag("watermark-text").onFocusChanged { focus ->
-            if (focus.isFocused && !hasFocus) actions.beginGesture()
-            if (!focus.isFocused && hasFocus) actions.endGesture()
-            hasFocus = focus.isFocused
-        }, shape = RoundedCornerShape(12.dp), maxLines = 3, keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences), textStyle = MaterialTheme.typography.bodyMedium)
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 14.dp, bottom = 10.dp), horizontalArrangement = Arrangement.spacedBy(15.dp)) {
+    fun dismissText() { keyboard?.hide(); focus.clearFocus(); editingText = false }
+    fun confirmText() {
+        if (draftText != latestRecipe.watermark.text) {
+            actions.beginGesture()
+            actions.updateRecipe(latestRecipe.copy(watermark = latestRecipe.watermark.copy(text = draftText)))
+            actions.endGesture()
+        }
+        dismissText()
+    }
+    Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 2.dp)) {
+        Box(Modifier.fillMaxWidth().heightIn(min = 48.dp).clip(RoundedCornerShape(10.dp)).background(Raised).testTag("edit-watermark-text").clickable {
+            draftText = latestRecipe.watermark.text
+            editingText = true
+        }.padding(horizontal = 12.dp, vertical = 10.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(recipe.watermark.text.ifBlank { "写下一句心情…" }, color = if (recipe.watermark.text.isBlank()) Muted else Color.White, fontSize = 13.sp, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("编辑", color = Accent, fontSize = 12.sp)
+            }
+        }
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 4.dp, bottom = 2.dp), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
             colors.forEachIndexed { index, color ->
                 val selected = recipe.watermark.color == color.toArgb()
-                Box(Modifier.size(27.dp).border(if (selected) 2.dp else 1.dp, if (selected) Accent else Divider, CircleShape).padding(if (selected) 4.dp else 2.dp).background(color, CircleShape).clickable { focus.clearFocus(); actions.beginGesture(); actions.updateRecipe(recipe.copy(watermark = recipe.watermark.copy(color = color.toArgb()))); actions.endGesture() }.semantics { contentDescription = "文字颜色：${colorNames[index]}" })
+                Box(Modifier.size(48.dp).clip(CircleShape).clickable { focus.clearFocus(); actions.beginGesture(); actions.updateRecipe(recipe.copy(watermark = recipe.watermark.copy(color = color.toArgb()))); actions.endGesture() }.semantics { contentDescription = "文字颜色：${colorNames[index]}" }, contentAlignment = Alignment.Center) {
+                    Box(Modifier.size(27.dp).border(if (selected) 2.dp else 1.dp, if (selected) Accent else Divider, CircleShape).padding(if (selected) 4.dp else 2.dp).background(color, CircleShape))
+                }
             }
         }
         ParameterSlider("字号", recipe.watermark.sizeFraction, .015f.. .16f, actions, { recipe.copy(watermark = recipe.watermark.copy(sizeFraction = it)) }, "${(recipe.watermark.sizeFraction * 1000f).roundToInt()}", .05f)
         Text("文字使用系统字体，可在图片上直接拖动。", color = Muted, fontSize = 10.sp, modifier = Modifier.padding(bottom = 10.dp))
     }
+    if (editingText) {
+        Dialog(onDismissRequest = { dismissText() }, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false, windowTitle = "编辑文字")) {
+            val requester = remember { FocusRequester() }
+            val dialogKeyboard = LocalSoftwareKeyboardController.current
+            val view = LocalView.current
+            var immersiveInput by remember { mutableStateOf(false) }
+            LaunchedEffect(Unit) { requester.requestFocus(); dialogKeyboard?.show() }
+            BoxWithConstraints(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.systemBars.union(WindowInsets.displayCutout)).imePadding().padding(horizontal = 12.dp, vertical = 4.dp)) {
+                LaunchedEffect(maxHeight) { if (maxHeight < 100.dp) immersiveInput = true }
+                DisposableEffect(view, immersiveInput) {
+                    val window = (view.parent as? DialogWindowProvider)?.window
+                    val controller = window?.let { WindowCompat.getInsetsController(it, view) }
+                    // Recover space only in very short input windows, keeping the editor's view state.
+                    if (immersiveInput) controller?.hide(WindowInsetsCompat.Type.statusBars())
+                    onDispose { if (immersiveInput) controller?.show(WindowInsetsCompat.Type.statusBars()) }
+                }
+                val compact = maxHeight < 220.dp
+                val cardPadding = if (compact) 4.dp else 16.dp
+                val rowHeight = (maxHeight - cardPadding * 2 - if (compact) 0.dp else 52.dp).coerceAtLeast(1.dp)
+                Surface(Modifier.align(Alignment.Center).widthIn(max = if (compact) 640.dp else 420.dp).fillMaxWidth().heightIn(max = maxHeight), shape = RoundedCornerShape(16.dp), color = Panel) {
+                    Column(Modifier.padding(cardPadding)) {
+                        if (!compact) Text("编辑文字", fontSize = 18.sp, modifier = Modifier.padding(bottom = 8.dp))
+                        Row(Modifier.fillMaxWidth().heightIn(max = rowHeight), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            // Keep the text field at the same composition position when IME height changes.
+                            OutlinedTextField(value = draftText, onValueChange = { draftText = it.take(240) }, placeholder = { Text("写下一句心情…", color = Muted, fontSize = 13.sp) }, modifier = Modifier.weight(1f).heightIn(max = rowHeight).testTag("watermark-text").focusRequester(requester), shape = RoundedCornerShape(12.dp), minLines = if (compact) 1 else 2, maxLines = if (compact) 2 else 4, keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Sentences), textStyle = MaterialTheme.typography.bodyMedium)
+                            if (compact) {
+                                Row {
+                                    TextButton(onClick = { dismissText() }, contentPadding = PaddingValues(4.dp), modifier = Modifier.width(56.dp).height(48.dp).testTag("cancel-watermark-text")) { Text("取消", color = Muted) }
+                                    TextButton(onClick = { confirmText() }, contentPadding = PaddingValues(4.dp), modifier = Modifier.width(56.dp).height(48.dp).testTag("confirm-watermark-text")) { Text("确认") }
+                                }
+                            } else {
+                                Column {
+                                    TextButton(onClick = { confirmText() }, modifier = Modifier.height(48.dp).testTag("confirm-watermark-text")) { Text("确认") }
+                                    TextButton(onClick = { dismissText() }, modifier = Modifier.height(48.dp).testTag("cancel-watermark-text")) { Text("取消", color = Muted) }
+                                }
+                            }
+                        }
+                        if (!compact) Text("${draftText.length}/240 · 支持多行文字", color = Muted, fontSize = 11.sp, modifier = Modifier.padding(top = 6.dp))
+                    }
+                }
+            }
+        }
+    }
 }
 
 /** UI aspect choice is ephemeral; the saved crop always contains the actual geometry. */
-private object CropAspect { var selected by mutableStateOf("自由") }
+private object CropAspect {
+    var sourcePath: String? = null
+    var selected by mutableStateOf("自由")
+}
 
 @Composable
 private fun CropPanel(state: EditorUiState, actions: EditorActions) {
     val recipe = state.recipe
     val source = state.source ?: return
     val full = Geometry.transformedSize(source, recipe)
-    LaunchedEffect(source.uri) { CropAspect.selected = "自由" }
-    Column(Modifier.padding(horizontal = 20.dp, vertical = 4.dp)) {
+    Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 4.dp)) {
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf("自由", "原比例", "1:1", "4:3", "16:9").forEach { name ->
-                ChoiceChip(name, CropAspect.selected == name, {
+                CompactChoiceChip(name, CropAspect.selected == name, {
                     CropAspect.selected = name
                     val target = aspectRatio(name, full.width, full.height)
                     actions.beginGesture()
@@ -741,7 +941,7 @@ private fun CropPanel(state: EditorUiState, actions: EditorActions) {
                 }, Modifier.testTag("crop-$name"))
             }
         }
-        Row(Modifier.fillMaxWidth().padding(top = 15.dp, bottom = 15.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
+        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(top = 8.dp, bottom = 8.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
             CropAction("rotate", "旋转 90°") {
                 CropAspect.selected = "自由"
                 actions.beginGesture()
@@ -886,7 +1086,7 @@ private fun CropAction(icon: String, label: String, action: () -> Unit) {
 }
 
 @Composable
-private fun IconAction(icon: String, label: String, enabled: Boolean = true, size: Int = 40, onClick: () -> Unit) {
+private fun IconAction(icon: String, label: String, enabled: Boolean = true, size: Int = 48, onClick: () -> Unit) {
     Box(Modifier.size(size.dp).clip(RoundedCornerShape(11.dp)).testTag("action-$icon").clickable(enabled = enabled, onClick = onClick).semantics { contentDescription = label }, contentAlignment = Alignment.Center) {
         Glyph(icon, if (enabled) Color(0xFFDEE7EB) else Muted.copy(alpha = .28f), Modifier.size(21.dp))
     }

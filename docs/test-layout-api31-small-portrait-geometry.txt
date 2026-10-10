@@ -1,0 +1,4 @@
+Curve drag: visible=Rect.fromLTRB(16.0, 353.0, 344.0, 450.0), start=Offset(164.0, 63.1), end=Offset(164.0, 43.1), before=CurvePoint(x=0.5, y=0.5721775), after=CurvePoint(x=0.5, y=0.7334678), requiredDelta=0.08064516
+Text actions in physical screen coordinates: IME=Rect(0, 187 - 360, 514), nativeOrigin=Offset(0.0, 0.0), confirmInWindow=Rect.fromLTRB(288.0, 101.0, 344.0, 149.0), cancelInWindow=Rect.fromLTRB(232.0, 101.0, 288.0, 149.0), confirmOnScreen=Rect.fromLTRB(288.0, 101.0, 344.0, 149.0), cancelOnScreen=Rect.fromLTRB(232.0, 101.0, 288.0, 149.0)
+Native window class=com.android.internal.policy.DecorView, focused=false, shown=true, size=360x640, screen=[0, 0], inWindow=[0, 0], origin=Offset(0.0, 0.0)
+Native window class=com.android.internal.policy.DecorView, focused=true, shown=true, size=360x640, screen=[0, 0], inWindow=[0, 0], origin=Offset(0.0, 0.0)

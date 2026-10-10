@@ -86,9 +86,15 @@ class EditorUiTest {
         assertNull(model.state.value.activeTool)
     }
 
+    private fun clickTool(tag: String) {
+        val node = compose.onNodeWithTag("tool-$tag")
+        if (compose.activity.resources.configuration.screenWidthDp >= 600) node.performScrollTo()
+        node.assertIsDisplayed().performClick()
+    }
+
     @Test fun editThroughEveryToolAndExportBothFormats() {
         importFixture()
-        compose.onNodeWithTag("tool-adjust").performClick()
+        clickTool("adjust")
         slider("曝光")
         assertTrue(model.state.value.recipe.adjustments.exposure > .2f)
         applyTool()
@@ -98,13 +104,14 @@ class EditorUiTest {
         compose.onNodeWithTag("action-redo").performClick()
         assertEquals(colored, model.state.value.recipe)
 
-        compose.onNodeWithTag("tool-adjust").performClick()
+        clickTool("adjust")
+        compose.onNodeWithTag("adjust-亮度").performScrollTo().performClick()
         slider("亮度")
         assertTrue(model.state.value.recipe.adjustments.brightness > .1f)
         compose.onNodeWithTag("cancel-tool").performClick()
         assertEquals(colored, model.state.value.recipe)
 
-        compose.onNodeWithTag("tool-curves").performClick()
+        clickTool("curves")
         compose.onNodeWithTag("curves-canvas").performTouchInput { click(center) }
         assertEquals(3, model.state.value.recipe.curves.rgb.size)
         compose.onNodeWithTag("curves-canvas").performTouchInput { swipe(center, Offset(center.x, center.y * .65f), durationMillis = 300) }
@@ -114,17 +121,19 @@ class EditorUiTest {
         assertEquals(3, model.state.value.recipe.curves.red.size)
         applyTool()
 
-        compose.onNodeWithTag("tool-hsl").performClick()
+        clickTool("hsl")
         compose.onNodeWithTag("hsl-0").performClick()
         slider("色相", .7f)
         assertTrue(model.state.value.recipe.hsl[0].hue > .1f)
         applyTool()
 
-        compose.onNodeWithTag("tool-text").performClick()
+        clickTool("text")
+        compose.onNodeWithTag("edit-watermark-text").performClick()
         compose.onNodeWithTag("watermark-text").performTextInput("你好，光影")
+        compose.onNodeWithTag("confirm-watermark-text").performClick()
         assertEquals("你好，光影", model.state.value.recipe.watermark.text)
         applyTool()
-        compose.onNodeWithTag("tool-text").performClick()
+        clickTool("text")
         awaitPreview()
         val initialY = model.state.value.recipe.watermark.y
         compose.onNodeWithTag("watermark-canvas").performTouchInput {
@@ -135,7 +144,7 @@ class EditorUiTest {
         assertTrue("Watermark should move", model.state.value.recipe.watermark.y < initialY - .05f)
         applyTool()
 
-        compose.onNodeWithTag("tool-crop").performClick()
+        clickTool("crop")
         awaitPreview()
         compose.onNodeWithTag("crop-1:1").performClick()
         var output = Geometry.outputSize(model.state.value.source!!, model.state.value.recipe)
@@ -193,7 +202,7 @@ class EditorUiTest {
 
     @Test fun photoPickerCancellationAndFailedImportPreserveCurrentWork() {
         importFixture()
-        compose.onNodeWithTag("tool-adjust").performClick()
+        clickTool("adjust")
         slider("曝光")
         applyTool()
         val before = model.state.value
@@ -214,7 +223,7 @@ class EditorUiTest {
 
     @Test fun systemBackCancelsToolAndRequiresConfirmationToClosePhoto() {
         importFixture()
-        compose.onNodeWithTag("tool-adjust").performClick()
+        clickTool("adjust")
         slider("曝光")
         systemBack()
         compose.waitUntil(5_000) { model.state.value.activeTool == null }

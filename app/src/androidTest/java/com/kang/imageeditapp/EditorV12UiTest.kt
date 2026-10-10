@@ -87,8 +87,14 @@ class EditorV12UiTest {
         awaitPreview()
     }
 
+    private fun clickTool(tag: String) {
+        val node = compose.onNodeWithTag("tool-$tag")
+        if (compose.activity.resources.configuration.screenWidthDp >= 600) node.performScrollTo()
+        node.assertIsDisplayed().performClick()
+    }
+
     private fun savePreset(name: String): ColorPreset {
-        compose.onNodeWithTag("tool-presets").performClick()
+        clickTool("presets")
         compose.onNodeWithTag("save-preset").performClick()
         compose.onNodeWithTag("preset-name").performTextInput(name)
         compose.onNodeWithTag("confirm-preset-name").performClick()
@@ -98,7 +104,7 @@ class EditorV12UiTest {
     }
 
     @Test fun personalPresetNameValidationRenameAndDeleteConfirmation() {
-        compose.onNodeWithTag("tool-presets").assertIsDisplayed().performClick()
+        clickTool("presets")
         val before = model.state.value.recipe
         compose.onNodeWithTag("save-preset").performClick()
         compose.onNodeWithTag("confirm-preset-name").assertIsNotEnabled()
@@ -142,7 +148,7 @@ class EditorV12UiTest {
         compose.onNodeWithTag("apply-tool").performClick()
         val receiving = EditRecipe(crop = CropRect(.2f, .1f, .8f, .9f), quarterTurns = 1, flipHorizontal = true, watermark = Watermark(text = "接收照片的文字", x = .3f, y = .6f))
         setRecipe(receiving)
-        compose.onNodeWithTag("tool-presets").performClick()
+        clickTool("presets")
         compose.onNodeWithTag("preset-${preset.id}").performScrollTo().performClick()
         awaitPreview()
         val expected = ColorGrade.capture(colored).applyTo(receiving)
@@ -150,7 +156,7 @@ class EditorV12UiTest {
         compose.onNodeWithTag("cancel-tool").performClick()
         awaitPreview()
         assertEquals(receiving, model.state.value.recipe)
-        compose.onNodeWithTag("tool-presets").performClick()
+        clickTool("presets")
         compose.onNodeWithTag("preset-${preset.id}").performScrollTo().performClick()
         compose.onNodeWithTag("apply-tool").performClick()
         awaitPreview()
@@ -166,7 +172,7 @@ class EditorV12UiTest {
     @Test fun copiedColorCanBePastedAcrossPhotosAndCanceled() {
         val colored = EditRecipe(adjustments = ColorAdjustments(contrast = .35f, saturation = .2f), watermark = Watermark(text = "来源文字"))
         setRecipe(colored)
-        compose.onNodeWithTag("tool-presets").performClick()
+        clickTool("presets")
         compose.onNodeWithTag("copy-grade").performClick()
         compose.waitUntil(10_000) { model.state.value.hasCopiedGrade && !model.state.value.isPresetBusy }
         compose.onNodeWithTag("paste-grade").assertIsEnabled()
@@ -174,7 +180,7 @@ class EditorV12UiTest {
         assertTrue(model.state.value.hasCopiedGrade)
         val receiving = EditRecipe(crop = CropRect(.1f, .1f, .9f, .8f), watermark = Watermark(text = "新的文字"))
         setRecipe(receiving)
-        compose.onNodeWithTag("tool-presets").performClick()
+        clickTool("presets")
         compose.onNodeWithTag("paste-grade").performClick()
         awaitPreview()
         val expected = ColorGrade.capture(colored).applyTo(receiving)
@@ -182,7 +188,7 @@ class EditorV12UiTest {
         compose.onNodeWithTag("cancel-tool").performClick()
         awaitPreview()
         assertEquals(receiving, model.state.value.recipe)
-        compose.onNodeWithTag("tool-presets").performClick()
+        clickTool("presets")
         compose.onNodeWithTag("paste-grade").performClick()
         compose.onNodeWithTag("apply-tool").performClick()
         awaitPreview()
