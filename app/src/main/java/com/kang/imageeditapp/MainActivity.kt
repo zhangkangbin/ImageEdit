@@ -44,6 +44,7 @@ class MainActivity : ComponentActivity() {
             override fun renamePreset(id: String, name: String) = model.renamePreset(id, name)
             override fun deletePreset(id: String) = model.deletePreset(id)
             override fun applyPreset(id: String) = model.applyPreset(id)
+            override fun applyBuiltInFilter(id: String) = model.applyBuiltInFilter(id)
             override fun copyColorGrade() = model.copyColorGrade()
             override fun pasteColorGrade() = model.pasteColorGrade()
             override fun dismissNotice() = model.dismissNotice()

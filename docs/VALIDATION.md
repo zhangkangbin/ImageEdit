@@ -1,5 +1,50 @@
 # 验证结果
 
+## 2026-10-10 · 默认滤镜（未发布）
+
+“预设”面板新增自然、鲜艳、暖阳、冷调、胶片、褪色、黑白、复古 8 款内置滤镜，以及仅恢复原始调色的“原色”入口。双列卡片支持滚动、风格说明和参数匹配高亮；复制、粘贴和保存入口保留在顶部，个人预设位于滤镜列表下方。
+
+切换滤镜替换整组调色、曲线和 HSL，保留照片的裁剪、旋转、翻转及文字。点击预览后可应用、取消、撤销/重做，已应用效果沿用草稿保存机制；可继续调整并另存个人预设。内置目录不写入个人预设存储，不占用 30 个名额。
+
+### 构建与单元测试
+
+```powershell
+$env:JAVA_HOME = 'D:\Program Files\Java\jdk-21.0.11'
+.\gradlew.bat assembleDebug assembleDebugAndroidTest testDebugUnitTest lintDebug --console=plain
+```
+
+最终构建成功，耗时 26 秒；45/45 项 JVM 测试通过，Lint 0 错误、12 条既有警告。新增 `BuiltInFiltersTest` 2 项，覆盖名称与参数有效性、不可变目录/曲线/HSL、切换替换完整调色及原色恢复；现有 43 项测试一同通过。构建日志保存在本机 `dist/build-builtin-filters.txt`。
+
+### 设备回归
+
+| 系统 | 结果 | 耗时 | 原始日志 |
+| --- | --- | ---: | --- |
+| API 31 / emulator-5554 | 24/24 通过 | 60.169 秒 | [API 31](test-builtin-filters-api31.txt) |
+| API 36 / emulator-5556 | 24/24 通过 | 73.638 秒 | [API 36](test-builtin-filters-api36.txt) |
+
+最终安装包验证 `EditorV12UiTest`（6 项）、`ColorWorkflowIntegrationTest`（8 项）及 `RenderIntegrationTest`（10 项），新增 4 项设备测试，原有 20 项个人预设、复制粘贴、草稿、渲染及导出检查一同通过。
+
+新增检查通过真实点击遍历全部 9 个入口，核对选择高亮、切换不叠加、原色仅恢复调色，裁剪、旋转、双向翻转及中文文字保留；验证预览取消、应用后撤销/重做、保存为个人预设，以及应用前草稿保持原状态、应用后跨 ViewModel 恢复。渲染检查使用暗部、中间灰、高光、三种彩色和半透明色块，确认 9 组像素效果互不相同、黑白通道一致、冷暖/棕褐色调及褪色暗部提升正确，预览与导出误差不超过 2 个通道值，透明度误差不超过 1。
+
+界面截图见 [默认滤镜入口](screenshots/builtin-filters.png)，保留原始屏幕尺寸。
+
+### 小屏与横屏
+
+| 系统 | 尺寸 | 结果 | 耗时 | 原始日志与截图 |
+| --- | --- | --- | ---: | --- |
+| API 31 | 360×640dp 竖屏 | 2/2 通过 | 18.788 秒 | [日志](test-builtin-filters-api31-portrait.txt)、[截图](screenshots/builtin-filters-portrait.png) |
+| API 36 | 640×360dp 横屏 | 2/2 通过 | 22.807 秒 | [日志](test-builtin-filters-api36-landscape.txt)、[截图](screenshots/builtin-filters-landscape.png) |
+
+使用 density 160 运行两个新增滤镜 UI 测试；竖屏底部面板和横屏侧栏均可滚动访问全部滤镜，保留复制、粘贴与保存入口，支持取消、应用、撤销/重做及另存个人预设。目视检查基线、竖屏与横屏原始截图。验收后两台模拟器均恢复 1080×2400、density 420、自动旋转开启（`accelerometer_rotation=1`）和 `user_rotation=0`。
+
+### 当前安装包
+
+本轮 Debug APK 已更新到 `dist/ImageEditApp-debug.apk`，版本 1.2.0 / versionCode 3，30,456,802 字节，SHA-256 为 `DA55F57BD8A34BB7A6EEC972440E8A11C093DE161DD3549D8D4C27E2073F6B67`。`apksigner verify --verbose` 通过（v2 签名有效），`zipalign -c -P 16 4` 通过。
+
+README、修改记录和本文的本地链接核对通过，`git diff --check` 通过。
+
+以下保留此前各轮验收历史，测试结果、截图和 APK 哈希对应当时构建。
+
 ## 2026-10-10 · 工具面板展开时隐藏标题栏（未发布）
 
 本轮构建版本为 1.2.0 / versionCode 3 Debug。展开调色、曲线、HSL、预设、文字或裁剪的参数面板时，顶部 56dp 标题栏自动隐藏，为图片预览腾出空间；收起面板、应用或取消工具后恢复标题栏，更换图片和导出入口重新显示。收起仅改变界面布局，保留未应用的参数和当前选择。

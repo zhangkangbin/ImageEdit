@@ -95,7 +95,7 @@ class EditorV12UiTest {
 
     private fun savePreset(name: String): ColorPreset {
         clickTool("presets")
-        compose.onNodeWithTag("save-preset").performClick()
+        compose.onNodeWithTag("save-preset").performScrollTo().assertIsDisplayed().performClick()
         compose.onNodeWithTag("preset-name").performTextInput(name)
         compose.onNodeWithTag("confirm-preset-name").performClick()
         compose.waitUntil(10_000) { model.state.value.presets.any { it.name == name } && !model.state.value.isPresetBusy }
@@ -135,6 +135,74 @@ class EditorV12UiTest {
         compose.waitUntil(10_000) { model.state.value.presets.none { it.id == preset.id } && !model.state.value.isPresetBusy }
         compose.onNodeWithTag("preset-${preset.id}").assertDoesNotExist()
         assertEquals(before, model.state.value.recipe)
+    }
+
+    @Test fun builtInFiltersAreSelectableAndOriginalOnlyResetsColor() {
+        val receiving = EditRecipe(
+            adjustments = ColorAdjustments(exposure = .6f),
+            curves = CurveSet(red = listOf(CurvePoint(0f, .1f), CurvePoint(1f, .9f))),
+            hsl = List(8) { HslAdjustment(hue = .2f) },
+            crop = CropRect(.1f, .2f, .9f, .8f), quarterTurns = 1, flipHorizontal = true, flipVertical = true,
+            watermark = Watermark("保留照片文字", x = .3f, y = .6f),
+        )
+        setRecipe(receiving)
+        val personal = model.state.value.presets
+        clickTool("presets")
+        BuiltInFilters.entries.forEach { filter ->
+            compose.onNodeWithTag("builtin-filter-${filter.id}").performScrollTo().assertIsDisplayed().performClick()
+            awaitPreview()
+            compose.onNodeWithTag("builtin-filter-${filter.id}").assertIsSelected()
+            assertEquals(filter.grade.applyTo(receiving), model.state.value.recipe)
+            assertEquals(personal, model.state.value.presets)
+        }
+        compose.onNodeWithTag("builtin-filter-original").performScrollTo().performClick()
+        awaitPreview()
+        assertEquals(ColorGrade().applyTo(receiving), model.state.value.recipe)
+        compose.onNodeWithTag("builtin-filter-original").assertIsSelected()
+        captureFilters()
+        compose.onNodeWithTag("cancel-tool").performClick()
+        awaitPreview()
+        assertEquals(receiving, model.state.value.recipe)
+    }
+
+    @Test fun builtInFilterPreviewCanCancelAndAppliedFilterCanUndoRedo() {
+        val receiving = EditRecipe(crop = CropRect(.1f, .1f, .9f, .9f), watermark = Watermark("原有文字"))
+        setRecipe(receiving)
+        clickTool("presets")
+        compose.onNodeWithTag("builtin-filter-film").performScrollTo().performClick()
+        awaitPreview()
+        compose.onNodeWithTag("cancel-tool").performClick()
+        awaitPreview()
+        assertEquals(receiving, model.state.value.recipe)
+        clickTool("presets")
+        compose.onNodeWithTag("builtin-filter-mono").performScrollTo().performClick()
+        awaitPreview()
+        val expected = BuiltInFilters.find("mono")!!.grade.applyTo(receiving)
+        val pixel = model.state.value.preview!!.getPixel(20, 20)
+        assertTrue(kotlin.math.abs(Color.red(pixel) - Color.green(pixel)) <= 1)
+        assertTrue(kotlin.math.abs(Color.red(pixel) - Color.blue(pixel)) <= 1)
+        compose.onNodeWithTag("apply-tool").performClick()
+        awaitPreview()
+        assertEquals(expected, model.state.value.recipe)
+        compose.onNodeWithTag("action-undo").performClick()
+        awaitPreview()
+        assertEquals(receiving, model.state.value.recipe)
+        compose.onNodeWithTag("action-redo").performClick()
+        awaitPreview()
+        assertEquals(expected, model.state.value.recipe)
+        val saved = savePreset("默认滤镜副本${System.nanoTime()}")
+        assertEquals(BuiltInFilters.find("mono")!!.grade, saved.grade)
+    }
+
+    private fun captureFilters() {
+        compose.onNodeWithTag("copy-grade").performScrollTo()
+        compose.waitForIdle()
+        val screenshot = InstrumentationRegistry.getInstrumentation().uiAutomation.takeScreenshot()!!
+        try {
+            File(context.filesDir, "builtin-filters.png").outputStream().use {
+                assertTrue(screenshot.compress(Bitmap.CompressFormat.PNG, 100, it))
+            }
+        } finally { screenshot.recycle() }
     }
 
     @Test fun presetPreviewCancelsAndAppliedPresetSupportsUndoWithoutReplacingGeometry() {

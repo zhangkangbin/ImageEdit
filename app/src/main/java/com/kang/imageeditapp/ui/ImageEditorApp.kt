@@ -40,6 +40,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -97,6 +98,7 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
@@ -116,7 +118,9 @@ import androidx.compose.ui.unit.sp
 import com.kang.imageeditapp.EditorActions
 import com.kang.imageeditapp.EditorUiState
 import com.kang.imageeditapp.model.ColorAdjustments
+import com.kang.imageeditapp.model.ColorGrade
 import com.kang.imageeditapp.model.ColorPreset
+import com.kang.imageeditapp.model.BuiltInFilters
 import com.kang.imageeditapp.model.CropRect
 import com.kang.imageeditapp.model.CurveChannel
 import com.kang.imageeditapp.model.CurvePoint
@@ -993,10 +997,36 @@ private fun PresetsPanel(state: EditorUiState, actions: EditorActions) {
             TextButton(onClick = actions::pasteColorGrade, enabled = enabled && state.hasCopiedGrade, modifier = Modifier.weight(1f).testTag("paste-grade")) { Text("粘贴调色", fontSize = 12.sp) }
             TextButton(onClick = { editingPreset = null; nameDialog = true }, enabled = enabled, modifier = Modifier.weight(1f).testTag("save-preset")) { Text("保存预设", fontSize = 12.sp) }
         }
-        Text("保存调色、曲线与 HSL，在其他照片中继续使用。", color = Muted, fontSize = 10.sp)
         if (state.isPresetBusy) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center) { CircularProgressIndicator(Modifier.size(20.dp), color = Accent, strokeWidth = 2.dp) }
         }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text("默认滤镜", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            Text("点击预览 · 应用后保留", color = Muted, fontSize = 10.sp)
+        }
+        val currentGrade = ColorGrade.capture(state.recipe)
+        BuiltInFilters.entries.chunked(2).forEach { filters ->
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                filters.forEach { filter ->
+                    val selected = currentGrade == filter.grade
+                    Column(
+                        Modifier.weight(1f).clip(RoundedCornerShape(12.dp))
+                            .background(if (selected) Accent.copy(alpha = .12f) else Raised)
+                            .border(1.dp, if (selected) Accent else Divider, RoundedCornerShape(12.dp))
+                            .testTag("builtin-filter-${filter.id}")
+                            .selectable(selected = selected, enabled = enabled, role = Role.Button) { actions.applyBuiltInFilter(filter.id) }
+                            .padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Text(filter.name, color = if (selected) Accent else MaterialTheme.colorScheme.onSurface, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                        Text(filter.description, color = Muted, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+                if (filters.size == 1) Spacer(Modifier.weight(1f))
+            }
+        }
+        Text("个人预设", fontSize = 13.sp, fontWeight = FontWeight.Medium, modifier = Modifier.padding(top = 8.dp))
+        Text("保存调色、曲线与 HSL，在其他照片中继续使用。", color = Muted, fontSize = 10.sp)
         if (state.presets.isEmpty()) {
             Column(Modifier.fillMaxWidth().padding(vertical = 22.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Glyph("preset", Muted, Modifier.size(28.dp))

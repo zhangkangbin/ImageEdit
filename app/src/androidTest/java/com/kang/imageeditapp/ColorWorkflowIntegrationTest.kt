@@ -77,6 +77,35 @@ class ColorWorkflowIntegrationTest {
         awaitDurable(model, expected)
     }
 
+    @Test fun builtInFilterRestoresWithDraftAndCanBeSavedWithoutSeedingPersonalLibrary() {
+        val (model, store) = importedModel()
+        assertTrue(model.state.value.presets.isEmpty())
+        val before = receivingRecipe()
+        commit(model, before)
+        awaitDurable(model, before)
+        val filter = BuiltInFilters.find("film")!!
+        val expected = filter.grade.applyTo(before)
+        main { model.selectTool(EditorTool.PRESETS); model.applyBuiltInFilter(filter.id) }
+        awaitPreview(model)
+        assertEquals(expected, model.state.value.recipe)
+        assertEquals(before, runBlocking { DraftRepository(application).load() }!!.recipe)
+        assertTrue(runBlocking { PresetRepository(application).load() }.presets.isEmpty())
+        main { model.applyTool() }
+        awaitDurable(model, expected)
+        main { store.clear(); stores.remove(store) }
+        val (restored, _) = createModel()
+        await("filtered draft restoration") { restored.state.value.let { !it.isPresetBusy && it.draft?.recipe == expected } }
+        main { restored.resumeDraft() }
+        awaitPreview(restored)
+        assertEquals(expected, restored.state.value.recipe)
+        main { restored.savePreset("胶片副本") }
+        await("saved built-in grade") { !restored.state.value.isPresetBusy && restored.state.value.presets.size == 1 }
+        assertEquals(filter.grade, runBlocking { PresetRepository(application).load() }.presets.single().grade)
+        main { restored.selectTool(EditorTool.PRESETS); restored.applyBuiltInFilter("original"); restored.applyTool() }
+        awaitDurable(restored, before)
+        assertEquals(1, restored.state.value.presets.size)
+    }
+
     @Test fun cancelingPresetPanelRestoresParametersAndHistoryCheckpoint() {
         val preset = runBlocking { PresetRepository(application).savePreset("待取消预设", presetGrade) }.presets.single()
         val (model, _) = importedModel()

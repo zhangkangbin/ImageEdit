@@ -60,6 +60,7 @@ interface EditorActions {
     fun renamePreset(id: String, name: String)
     fun deletePreset(id: String)
     fun applyPreset(id: String)
+    fun applyBuiltInFilter(id: String)
     fun copyColorGrade()
     fun pasteColorGrade()
     fun dismissNotice()

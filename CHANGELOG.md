@@ -4,6 +4,17 @@
 
 ## 未发布
 
+### 2026-10-10 · 添加默认滤镜
+
+- 内置调色（`model/BuiltInFilters.kt`）：提供自然、鲜艳、暖阳、冷调、胶片、褪色、黑白、复古 8 款默认滤镜和“原色”入口，以调色、通道曲线和 HSL 参数实现；滤镜目录及参数列表不可变，独立于个人预设存储，不占用个人预设名额。
+- 操作与界面（`EditorContract.kt`、`EditorViewModel.kt`、`MainActivity.kt`、`ui/ImageEditorApp.kt`）：在“预设”面板增加可滚动的双列默认滤镜卡片、风格说明和当前参数匹配高亮；压缩顶部说明，保留复制、粘贴和保存入口。切换滤镜替换全部调色参数，支持预览、应用、取消、撤销和重做，保留裁剪、旋转、翻转及文字；“原色”仅重置调色，滤镜效果可继续编辑或另存个人预设。
+- 回归覆盖（`BuiltInFiltersTest`、`EditorV12UiTest`、`ColorWorkflowIntegrationTest`、`RenderIntegrationTest`）：新增目录与参数有效性、不可变列表、滤镜切换及原色恢复检查，以及真实界面、草稿恢复、另存个人预设、预览/导出一致、透明度、黑白与冷暖色调的设备检查；保存预设的测试操作先滚动到按钮，适配面板保留滚动位置的行为。README 和验证说明同步更新。
+- 构建验证：`assembleDebug assembleDebugAndroidTest testDebugUnitTest lintDebug --console=plain` 成功，45/45 项 JVM 测试通过，Lint 0 错误、12 条既有警告。
+- 设备验证：最终安装包在 API 31、API 36 使用 `am instrument -w -r -e class com.kang.imageeditapp.EditorV12UiTest,com.kang.imageeditapp.ColorWorkflowIntegrationTest,com.kang.imageeditapp.RenderIntegrationTest` 各通过 24/24 项相关回归，覆盖全部滤镜入口、预览取消、撤销/重做、个人预设及草稿恢复，渲染像素与透明度检查；原始日志和截图见 [验证说明](docs/VALIDATION.md)。
+- 布局验证：API 31 的 360×640dp 竖屏及 API 36 的 640×360dp 横屏各通过 2/2 项新增滤镜 UI 测试，目视检查基线和横竖屏截图；验收后恢复两台模拟器的尺寸、密度及旋转设置。
+- 文档验证：README、修改记录和验证说明的本地链接全部可达，`git diff --check` 通过。
+- 安装包：更新 `dist/ImageEditApp-debug.apk`（1.2.0 / versionCode 3），30,456,802 字节，SHA-256 为 `DA55F57BD8A34BB7A6EEC972440E8A11C093DE161DD3549D8D4C27E2073F6B67`；`apksigner verify --verbose`（v2 签名）及 `zipalign -c -P 16 4` 均通过。
+
 ### 2026-10-10 · 工具面板展开时隐藏标题栏
 
 - 标题栏与编辑工作区（`app/src/main/java/com/kang/imageeditapp/ui/ImageEditorApp.kt`）：展开调色、曲线、HSL、预设、文字或裁剪面板时隐藏顶部 56dp 标题栏，释放全部标题栏高度给工作区；收起、应用或取消后恢复标题栏及更换图片、导出入口。面板收起状态提升到界面根部，选择另一工具立即展开，工作区和查看状态持续保留，收起不提交编辑。

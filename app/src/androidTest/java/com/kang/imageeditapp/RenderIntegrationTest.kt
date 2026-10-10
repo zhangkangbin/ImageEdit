@@ -82,6 +82,48 @@ class RenderIntegrationTest {
         preview.recycle(); output.recycle()
     }
 
+    @Test fun builtInFiltersProduceDistinctPixelsWithMatchingPreviewExportAndAlpha() = withEngine { engine ->
+        val colors = listOf(Color.rgb(15, 15, 15), Color.rgb(125, 125, 125), Color.rgb(210, 210, 210),
+            Color.rgb(150, 85, 60), Color.rgb(60, 145, 85), Color.rgb(65, 100, 170), 0x8060B0E0.toInt())
+        val bitmap = Bitmap.createBitmap(140, 20, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        colors.forEachIndexed { index, color ->
+            canvas.drawRect(index * 20f, 0f, (index + 1) * 20f, 20f, Paint().apply { this.color = color })
+        }
+        val file = File.createTempFile("builtin-filter-", ".png", context.cacheDir)
+        try {
+            file.outputStream().use { assertTrue(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) }
+            val input = PhotoSource(Uri.fromFile(file), file.path, bitmap.width, bitmap.height)
+            val signatures = mutableMapOf<String, List<Int>>()
+            BuiltInFilters.entries.forEach { filter ->
+                val recipe = filter.grade.applyTo(EditRecipe())
+                val preview = engine.renderPreview(input, recipe)
+                val output = engine.renderExport(input, recipe)
+                try {
+                    val pixels = colors.indices.map { index -> output.getPixel(index * 20 + 10, 10) }
+                    signatures[filter.id] = pixels
+                    pixels.forEachIndexed { index, pixel ->
+                        assertColor(pixel, preview.getPixel(index * 20 + 10, 10), 2)
+                        assertTrue(abs(Color.alpha(colors[index]) - Color.alpha(pixel)) <= 1)
+                        if (filter.id == "original") assertColor(colors[index], pixel, 2)
+                        if (filter.id == "mono") {
+                            assertTrue(abs(Color.red(pixel) - Color.green(pixel)) <= 2)
+                            assertTrue(abs(Color.red(pixel) - Color.blue(pixel)) <= 2)
+                        }
+                    }
+                } finally { preview.recycle(); output.recycle() }
+            }
+            assertEquals(BuiltInFilters.entries.size, signatures.values.distinct().size)
+            val warm = signatures.getValue("warm")[1]
+            val cool = signatures.getValue("cool")[1]
+            assertTrue(Color.red(warm) > Color.blue(warm))
+            assertTrue(Color.blue(cool) > Color.red(cool))
+            assertTrue(Color.red(signatures.getValue("fade")[0]) > Color.red(colors[0]))
+            val sepia = signatures.getValue("sepia")[1]
+            assertTrue(Color.red(sepia) > Color.green(sepia) && Color.green(sepia) > Color.blue(sepia))
+        } finally { bitmap.recycle(); file.delete() }
+    }
+
     @Test fun transparentPngRetainsAlphaAndJpegUsesWhiteBackground() = withEngine { engine ->
         val input = source(alpha = true)
         val output = engine.renderExport(input, EditRecipe())

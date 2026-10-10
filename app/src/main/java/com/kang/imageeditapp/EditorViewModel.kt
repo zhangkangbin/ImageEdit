@@ -338,6 +338,15 @@ class EditorViewModel(application: Application) : AndroidViewModel(application) 
         mutableState.value = mutableState.value.copy(notice = "已套用「${preset.name}」")
     }
 
+    fun applyBuiltInFilter(id: String) {
+        val current = mutableState.value
+        if (!canUseGrade(current)) return
+        val filter = BuiltInFilters.find(id) ?: return
+        endGesture()
+        updateRecipe(filter.grade.applyTo(current.recipe))
+        mutableState.value = mutableState.value.copy(notice = if (id == "original") "已恢复原始调色" else "已套用「${filter.name}」滤镜")
+    }
+
     fun copyColorGrade() {
         val current = mutableState.value
         if (!canUseGrade(current)) return
