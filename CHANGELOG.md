@@ -4,6 +4,21 @@
 
 ## 未发布
 
+### 2026-10-10 · 工具面板展开时隐藏标题栏
+
+- 标题栏与编辑工作区（`app/src/main/java/com/kang/imageeditapp/ui/ImageEditorApp.kt`）：展开调色、曲线、HSL、预设、文字或裁剪面板时隐藏顶部 56dp 标题栏，释放全部标题栏高度给工作区；收起、应用或取消后恢复标题栏及更换图片、导出入口。面板收起状态提升到界面根部，选择另一工具立即展开，工作区和查看状态持续保留，收起不提交编辑。
+- 宽屏标题栏隐藏时，直方图和溢出提示入口回到图片浮层；恢复标题栏后入口回到顶栏，保持唯一且可达。尺寸徽标避开展开的直方图及溢出说明，撤销、重做、按住对比仍位于预览右下角。
+- 界面验收（`EditorLayoutUiTest`、`EditorUiTest`、`EditorV11UiTest`、`EditorV12UiTest`）：现有六项布局测试增加标题栏显隐、实际回收 56dp、收起/展开保留参数和 100% 查看中心、应用/取消恢复及横屏分析入口迁移检查；保存收起截图，核对导出、更换图片和返回入口恢复。README 与 `docs/VALIDATION.md` 同步新行为、原始日志和截图，保留之前的验证历史。
+- 验证：`assembleDebug assembleDebugAndroidTest testDebugUnitTest lintDebug` 同次构建成功，43/43 项 JVM 测试通过，Lint 0 错误、12 条警告。API 31、API 36 各 21/21 项相关界面回归通过；两台模拟器的 360×640dp 与 640×360dp 各 6/6 项布局回归通过，包含真实键盘、中文多行输入及曲线拖点；目视检查展开、收起和小屏截图。验证后恢复两台模拟器的尺寸、密度、旋转及键盘设置。
+- 交付：更新 `dist/ImageEditApp-debug.apk`，30,379,405 字节，SHA-256 为 `2E7D23637DDEA1F52F533374B81C5AF5BEA54982B0F663D27271A4330EF41740`；`apksigner verify --verbose` 通过（v2 签名有效），`zipalign -c -P 16 4` 通过。文档内容、链接核对和 `git diff --check` 通过。详见 [验证说明](docs/VALIDATION.md)。
+
+### 2026-10-10 · 图片操作按钮移到预览右下角
+
+- 图片操作与顶栏（`app/src/main/java/com/kang/imageeditapp/ui/ImageEditorApp.kt`）：移除图片右下角的倍率文字、“适配”和“100%”按钮，将撤销、重做、按住查看原图移到预览右下角浮层，三个按钮均为 48dp，顶栏相应简化。双指缩放、平移和双击切换适配/100% 保留。
+- 原图对比在按下时消费事件，松手、取消或手势终止时通过 `try/finally` 恢复编辑效果；按钮不触发图片画布手势。查看验收（`PreviewViewport.kt` 与图片画布）：新增 `PreviewPixelScaleKey`、`PreviewViewportModeKey` 语义属性，用于读取实际倍率和查看模式，不显示倍率控件。
+- 回归测试（`EditorLayoutUiTest`、`EditorUiTest`、`EditorV11UiTest`、`PreviewGestureTestHelpers`）：原倍率按钮操作改为真实双击手势和非可见倍率读取，手势避开操作浮层；保留高清区域、双指与文字/裁剪坐标检查，扩展按钮位置、撤销重做及按住对比的像素变化和松手恢复检查。
+- 验证：`assembleDebug testDebugUnitTest`、`assembleDebugAndroidTest lintDebug` 成功，43/43 项 JVM 测试通过，Lint 0 错误、12 条警告。API 31、API 36 各 21/21 项相关界面回归通过；两台模拟器在 360×640dp 和 640×360dp 各通过 6/6 项布局回归，保存新按钮布局截图及原始日志。Debug APK 已归档到 `dist/ImageEditApp-debug.apk`，30,379,405 字节，SHA-256 为 `D43DAAFD6813CBB421F51398795DF65AE0E31EE8B832E2F24A920C6D5142E6D8`；`apksigner verify --verbose` 通过（v2 签名有效），`zipalign -c -P 16 4` 通过。文档内容、链接核对及 `git diff --check` 通过。详见 [验证说明](docs/VALIDATION.md)。
+
 ### 2026-10-09 · 编辑操作与预览布局优化
 
 - 编辑工作区与工具面板（`app/src/main/java/com/kang/imageeditapp/ui/ImageEditorApp.kt`）：使用 56dp 顶栏、64dp 底部工具栏，窄屏参数面板限制为最多 240dp 且不超过可用编辑区高度的 44%，按像素向下取整保证至少 56% 预览空间，图片画布留白缩至 12dp；宽度至少 600dp 时改为左侧工具栏、中央图片和右侧 280dp 参数面板。窄屏可收起到 48dp 标题栏，侧栏可收起到 56dp。直方图改为可关闭的浮动卡片，图片信息和提示改为浮层；横屏入口移到顶栏，较矮预览区隐藏辅助文字。

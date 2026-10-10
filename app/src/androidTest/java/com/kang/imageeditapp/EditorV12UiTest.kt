@@ -198,7 +198,8 @@ class EditorV12UiTest {
     @Test fun exportSizeQualityValidationAndFormatProduceExpectedPixels() {
         val before = model.state.value.recipe
         val originalOptions = model.state.value.exportOptions
-        compose.onNodeWithTag("open-export").performClick()
+        compose.onNodeWithTag("editor-header").assertIsDisplayed()
+        compose.onNodeWithTag("open-export").assertIsDisplayed().performClick()
         compose.onNodeWithTag("resolution-1080").performClick()
         compose.onNodeWithTag("cancel-export").performClick()
         assertEquals(originalOptions, model.state.value.exportOptions)

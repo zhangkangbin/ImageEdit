@@ -98,6 +98,7 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.input.KeyboardType
@@ -155,6 +156,15 @@ fun ImageEditorApp(state: EditorUiState, actions: EditorActions) {
     var deleteDraftDialog by remember { mutableStateOf(false) }
     var histogramExpanded by remember { mutableStateOf(false) }
     var clippingEnabled by remember { mutableStateOf(false) }
+    var collapsed by rememberSaveable(state.source?.localPath) { mutableStateOf(false) }
+    var previousTool by rememberSaveable(state.source?.localPath) { mutableStateOf(state.activeTool) }
+    // A newly selected tool opens immediately, including selection outside the navigation rail.
+    val panelCollapsed = collapsed && previousTool == state.activeTool
+    val headerVisible = state.activeTool == null || panelCollapsed
+    LaunchedEffect(state.activeTool) {
+        if (state.activeTool != previousTool && state.activeTool != null) collapsed = false
+        previousTool = state.activeTool
+    }
     val focus = LocalFocusManager.current
     MaterialTheme(colorScheme = darkColorScheme(primary = Accent, onPrimary = Ink, background = Ink, surface = Panel, onSurface = Color(0xFFEAF0F2), secondary = Accent)) {
         BackHandler(enabled = state.source != null) {
@@ -170,7 +180,7 @@ fun ImageEditorApp(state: EditorUiState, actions: EditorActions) {
                     if (state.source == null) {
                         EmptyEditor(state, actions, { deleteDraftDialog = true })
                     } else {
-                        EditorHeader(state, actions, comparing, { comparing = it }, {
+                        if (headerVisible) EditorHeader(state, actions, {
                             focus.clearFocus()
                             exportDialog = true
                         }, {
@@ -182,7 +192,7 @@ fun ImageEditorApp(state: EditorUiState, actions: EditorActions) {
                                 TextButton(onClick = { clippingEnabled = !clippingEnabled }, modifier = Modifier.height(48.dp).testTag("toggle-clipping").semantics { contentDescription = "溢出提示${if (clippingEnabled) "开启" else "关闭"}" }) { Text("溢出", fontSize = 11.sp, color = if (clippingEnabled) Accent else Muted) }
                             }
                         })
-                        EditorWorkspace(state, actions, comparing, histogramExpanded, { histogramExpanded = !histogramExpanded }, clippingEnabled, { clippingEnabled = !clippingEnabled }, Modifier.weight(1f))
+                        EditorWorkspace(state, actions, comparing, { comparing = it }, panelCollapsed, { collapsed = !panelCollapsed }, headerVisible, histogramExpanded, { histogramExpanded = !histogramExpanded }, clippingEnabled, { clippingEnabled = !clippingEnabled }, Modifier.weight(1f))
                     }
                 }
             }
@@ -225,7 +235,8 @@ fun ImageEditorApp(state: EditorUiState, actions: EditorActions) {
 
 @Composable
 private fun EditorWorkspace(
-    state: EditorUiState, actions: EditorActions, comparing: Boolean,
+    state: EditorUiState, actions: EditorActions, comparing: Boolean, setComparing: (Boolean) -> Unit,
+    collapsed: Boolean, toggleCollapsed: () -> Unit, headerVisible: Boolean,
     histogramExpanded: Boolean, toggleHistogram: () -> Unit,
     clippingEnabled: Boolean, toggleClipping: () -> Unit, modifier: Modifier,
 ) {
@@ -238,21 +249,12 @@ private fun EditorWorkspace(
         }
     }
     val focus = LocalFocusManager.current
-    var collapsed by rememberSaveable(source.localPath) { mutableStateOf(false) }
-    var previousTool by rememberSaveable(source.localPath) { mutableStateOf(state.activeTool) }
     val toolStates = rememberSaveableStateHolder()
     val normalViewport = rememberSaveable(source.localPath, recipe.quarterTurns, recipe.flipHorizontal, recipe.flipVertical, recipe.crop, saver = PreviewViewportState.Saver) { PreviewViewportState() }
     val cropViewport = rememberSaveable(source.localPath, recipe.quarterTurns, recipe.flipHorizontal, recipe.flipVertical, saver = PreviewViewportState.Saver) { PreviewViewportState() }
-    LaunchedEffect(state.activeTool) {
-        if (state.activeTool != previousTool && state.activeTool != null) collapsed = false
-        previousTool = state.activeTool
-    }
     val select: (EditorTool) -> Unit = { tool ->
         focus.clearFocus()
-        if (state.activeTool == tool) collapsed = !collapsed else {
-            collapsed = false
-            actions.selectTool(tool)
-        }
+        if (state.activeTool == tool) toggleCollapsed() else actions.selectTool(tool)
     }
     val apply = { focus.clearFocus(); actions.applyTool() }
     val cancel = { focus.clearFocus(); actions.cancelTool() }
@@ -261,9 +263,9 @@ private fun EditorWorkspace(
         if (wide) {
             Row(Modifier.fillMaxSize().testTag("editor-workspace")) {
                 ToolNavigation(state.activeTool, !state.isLoading && !state.isExporting, select, vertical = true)
-                PreviewStage(state, actions, comparing, clippingEnabled, normalViewport, cropViewport, histogramExpanded, toggleHistogram, toggleClipping, true, Modifier.weight(1f).fillMaxHeight())
+                PreviewStage(state, actions, comparing, setComparing, clippingEnabled, normalViewport, cropViewport, histogramExpanded, toggleHistogram, toggleClipping, true, headerVisible, Modifier.weight(1f).fillMaxHeight())
                 state.activeTool?.let { tool ->
-                    ToolPanel(tool, state, actions, apply, cancel, collapsed, { collapsed = !collapsed }, true, toolStates, Modifier.width(if (collapsed) 56.dp else 280.dp).fillMaxHeight())
+                    ToolPanel(tool, state, actions, apply, cancel, collapsed, toggleCollapsed, true, toolStates, Modifier.width(if (collapsed) 56.dp else 280.dp).fillMaxHeight())
                 }
             }
         } else {
@@ -275,9 +277,9 @@ private fun EditorWorkspace(
                         min(240.dp.toPx(), maxHeight.toPx() * .44f).toInt().toDp()
                     }
                     Column(Modifier.fillMaxSize().testTag("editor-workspace")) {
-                        PreviewStage(state, actions, comparing, clippingEnabled, normalViewport, cropViewport, histogramExpanded, toggleHistogram, toggleClipping, false, Modifier.weight(1f).fillMaxWidth())
+                        PreviewStage(state, actions, comparing, setComparing, clippingEnabled, normalViewport, cropViewport, histogramExpanded, toggleHistogram, toggleClipping, false, headerVisible, Modifier.weight(1f).fillMaxWidth())
                         state.activeTool?.let { tool ->
-                            ToolPanel(tool, state, actions, apply, cancel, collapsed, { collapsed = !collapsed }, false, toolStates, Modifier.fillMaxWidth().height(panelHeight))
+                            ToolPanel(tool, state, actions, apply, cancel, collapsed, toggleCollapsed, false, toolStates, Modifier.fillMaxWidth().height(panelHeight))
                         }
                     }
                 }
@@ -357,21 +359,12 @@ private fun EmptyEditor(state: EditorUiState, actions: EditorActions, deleteDraf
 }
 
 @Composable
-private fun EditorHeader(state: EditorUiState, actions: EditorActions, comparing: Boolean, setComparing: (Boolean) -> Unit, export: () -> Unit, close: () -> Unit, analysisControls: @Composable () -> Unit) {
+private fun EditorHeader(state: EditorUiState, actions: EditorActions, export: () -> Unit, close: () -> Unit, analysisControls: @Composable () -> Unit) {
     val focus = LocalFocusManager.current
-    Row(Modifier.fillMaxWidth().height(56.dp).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+    Row(Modifier.fillMaxWidth().height(56.dp).testTag("editor-header").padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
         IconAction("back", "结束编辑", onClick = close)
         Text("编辑 ▾", fontSize = 17.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f).clip(RoundedCornerShape(8.dp)).clickable(enabled = !state.isLoading && !state.isExporting) { focus.clearFocus(); actions.importPhoto() }.padding(start = 4.dp, top = 8.dp, bottom = 8.dp).testTag("replace-photo").semantics { contentDescription = "更换图片" }, maxLines = 1)
         analysisControls()
-        IconAction("undo", "撤销", enabled = state.canUndo) { focus.clearFocus(); actions.undo() }
-        IconAction("redo", "重做", enabled = state.canRedo) { focus.clearFocus(); actions.redo() }
-        Box(Modifier.size(48.dp).clip(RoundedCornerShape(12.dp)).background(if (comparing) Accent.copy(alpha = .14f) else Color.Transparent).testTag("compare").semantics { contentDescription = "按住查看原图" }.pointerInput(Unit) {
-            awaitEachGesture {
-                awaitFirstDown(requireUnconsumed = false)
-                setComparing(true)
-                try { waitForUpOrCancellation() } finally { setComparing(false) }
-            }
-        }, contentAlignment = Alignment.Center) { Glyph("compare", if (comparing) Accent else Color(0xFFE2EAED), Modifier.size(21.dp)) }
         Button(onClick = export, enabled = !state.isLoading && !state.isExporting && state.preview != null, shape = RoundedCornerShape(12.dp), contentPadding = PaddingValues(horizontal = 14.dp, vertical = 0.dp), modifier = Modifier.height(38.dp).padding(start = 6.dp).testTag("open-export")) { Text("导出", fontSize = 13.sp, fontWeight = FontWeight.SemiBold) }
     }
 }
@@ -422,10 +415,10 @@ private fun AnalysisPanel(analysis: PreviewAnalysis?, expanded: Boolean, toggleE
 
 @Composable
 private fun PreviewStage(
-    state: EditorUiState, actions: EditorActions, comparing: Boolean, clipping: Boolean,
+    state: EditorUiState, actions: EditorActions, comparing: Boolean, setComparing: (Boolean) -> Unit, clipping: Boolean,
     normalViewport: PreviewViewportState, cropViewport: PreviewViewportState,
     histogramExpanded: Boolean, toggleHistogram: () -> Unit, toggleClipping: () -> Unit,
-    sideLayout: Boolean,
+    sideLayout: Boolean, headerVisible: Boolean,
     modifier: Modifier = Modifier,
 ) {
     val cropMode = state.activeTool == EditorTool.CROP && !comparing
@@ -438,12 +431,13 @@ private fun PreviewStage(
         } else {
             CircularProgressIndicator(Modifier.align(Alignment.Center).size(28.dp), color = Accent, strokeWidth = 2.dp)
         }
-        if (!sideLayout || maxHeight >= 240.dp) Row(Modifier.align(if (sideLayout) Alignment.TopStart else Alignment.BottomStart).padding(start = 12.dp, top = if (sideLayout) 8.dp else 0.dp, bottom = if (sideLayout) 0.dp else 56.dp).clip(RoundedCornerShape(12.dp)).background(Ink.copy(alpha = .8f)).padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        val dimensionsTop = when { !sideLayout -> 0.dp; headerVisible -> 8.dp; clipping -> 84.dp; else -> 64.dp }
+        if (!sideLayout || (maxHeight >= 240.dp && !histogramExpanded)) Row(Modifier.align(if (sideLayout) Alignment.TopStart else Alignment.BottomStart).padding(start = 12.dp, top = dimensionsTop, bottom = if (sideLayout) 0.dp else 56.dp).clip(RoundedCornerShape(12.dp)).background(Ink.copy(alpha = .8f)).padding(horizontal = 8.dp, vertical = 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             Box(Modifier.size(5.dp).background(if (comparing) Color.White else Accent, CircleShape))
             Text(if (comparing) "原图" else "${output.width} × ${output.height}", fontSize = 10.sp, color = Color(0xFFC6D0D5), maxLines = 1)
         }
-        if (!sideLayout || histogramExpanded) Box(Modifier.align(Alignment.TopStart).padding(8.dp).widthIn(max = 320.dp).fillMaxWidth().heightIn(max = (maxHeight - 16.dp).coerceAtLeast(0.dp)).clip(RoundedCornerShape(12.dp)).verticalScroll(rememberScrollState())) {
-            AnalysisPanel(state.analysis, histogramExpanded, toggleHistogram, clipping, toggleClipping, sideLayout)
+        if (!sideLayout || !headerVisible || histogramExpanded) Box(Modifier.align(Alignment.TopStart).padding(8.dp).widthIn(max = 320.dp).fillMaxWidth().heightIn(max = (maxHeight - 16.dp).coerceAtLeast(0.dp)).clip(RoundedCornerShape(12.dp)).verticalScroll(rememberScrollState())) {
+            AnalysisPanel(state.analysis, histogramExpanded, toggleHistogram, clipping, toggleClipping, sideLayout && headerVisible)
         }
         if (state.isRendering) {
             CircularProgressIndicator(Modifier.align(Alignment.TopEnd).padding(14.dp).size(14.dp), color = Accent, strokeWidth = 1.5.dp)
@@ -455,6 +449,29 @@ private fun PreviewStage(
                 TextButton(onClick = actions::dismissNotice, modifier = Modifier.testTag("dismiss-notice")) { Text("关闭", color = Muted, fontSize = 12.sp) }
             }
         }
+        PreviewActions(state, actions, comparing, setComparing, Modifier.align(Alignment.BottomEnd).padding(18.dp))
+    }
+}
+
+@Composable
+private fun PreviewActions(state: EditorUiState, actions: EditorActions, comparing: Boolean, setComparing: (Boolean) -> Unit, modifier: Modifier) {
+    val focus = LocalFocusManager.current
+    val latestSetComparing by rememberUpdatedState(setComparing)
+    Row(modifier.clip(RoundedCornerShape(12.dp)).background(Ink.copy(alpha = .86f)).padding(3.dp).testTag("preview-actions"), verticalAlignment = Alignment.CenterVertically) {
+        IconAction("undo", "撤销", enabled = state.canUndo) { focus.clearFocus(); actions.undo() }
+        IconAction("redo", "重做", enabled = state.canRedo) { focus.clearFocus(); actions.redo() }
+        Box(Modifier.size(48.dp).clip(RoundedCornerShape(11.dp)).background(if (comparing) Accent.copy(alpha = .14f) else Color.Transparent).testTag("compare").semantics {
+            contentDescription = "按住查看原图"
+            stateDescription = if (comparing) "原图" else "编辑效果"
+        }.pointerInput(Unit) {
+            awaitEachGesture {
+                val down = awaitFirstDown()
+                down.consume()
+                focus.clearFocus()
+                latestSetComparing(true)
+                try { waitForUpOrCancellation()?.consume() } finally { latestSetComparing(false) }
+            }
+        }, contentAlignment = Alignment.Center) { Glyph("compare", if (comparing) Accent else Color(0xFFE2EAED), Modifier.size(21.dp)) }
     }
 }
 
@@ -484,7 +501,11 @@ private fun PhotoCanvas(bitmap: Bitmap, state: EditorUiState, actions: EditorAct
     }
     val baseOverlay = if (cropMode) state.fullPreviewOverlay else state.previewOverlay
     val detail = state.detail?.takeIf { it.cropMode == cropMode && it.comparing == comparing }
-    Box(modifier.clipToBounds().onSizeChanged { frameSize = it }.testTag("photo-canvas").semantics { contentDescription = "图片预览，可双指缩放、平移及双击查看原始像素" }.pointerInput(geometry, cropMode, textMode, viewportState) {
+    Box(modifier.clipToBounds().onSizeChanged { frameSize = it }.testTag("photo-canvas").semantics {
+        contentDescription = "图片预览，可双指缩放、平移及双击查看原始像素"
+        this[PreviewPixelScaleKey] = geometry.fitScale * viewport.zoom
+        this[PreviewViewportModeKey] = viewportState.mode
+    }.pointerInput(geometry, cropMode, textMode, viewportState) {
         var lastTapTime = 0L
         var lastTapAt = Offset.Zero
         fun moveViewport(next: PreviewViewport) {
@@ -582,11 +603,6 @@ private fun PhotoCanvas(bitmap: Bitmap, state: EditorUiState, actions: EditorAct
                     drawCircle(Accent, 3f * density, Offset(bound.right, bound.bottom))
                 }
             }
-        }
-        Row(Modifier.align(Alignment.BottomEnd).padding(6.dp).clip(RoundedCornerShape(11.dp)).background(Ink.copy(alpha = .86f)).padding(3.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("${(geometry.fitScale * viewport.zoom * 100f).roundToInt()}%", color = Muted, fontSize = 10.sp, modifier = Modifier.padding(horizontal = 7.dp).testTag("zoom-percent"))
-            TextButton(onClick = { viewportState.fit() }, contentPadding = PaddingValues(horizontal = 7.dp), modifier = Modifier.height(30.dp).testTag("zoom-fit")) { Text("适配", color = if (viewportState.mode == PreviewViewportMode.FIT) Accent else Muted, fontSize = 11.sp) }
-            TextButton(onClick = { viewportState.update(geometry.constrain(PreviewViewport(geometry.nativeZoom)), geometry) }, contentPadding = PaddingValues(horizontal = 7.dp), modifier = Modifier.height(30.dp).testTag("zoom-native")) { Text("100%", color = if (abs(viewport.zoom - geometry.nativeZoom) < .01f) Accent else Muted, fontSize = 11.sp) }
         }
     }
 }

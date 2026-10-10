@@ -1,5 +1,101 @@
 # 验证结果
 
+## 2026-10-10 · 工具面板展开时隐藏标题栏（未发布）
+
+本轮构建版本为 1.2.0 / versionCode 3 Debug。展开调色、曲线、HSL、预设、文字或裁剪的参数面板时，顶部 56dp 标题栏自动隐藏，为图片预览腾出空间；收起面板、应用或取消工具后恢复标题栏，更换图片和导出入口重新显示。收起仅改变界面布局，保留未应用的参数和当前选择。
+
+宽屏标题栏隐藏时，直方图与溢出提示入口移到图片预览浮层；标题栏恢复后，入口回到顶栏。撤销、重做和按住查看原图继续位于预览右下角。适配模式随可用区域变化，手动缩放与 100% 查看保留实际像素倍率，查看中心按图片边界约束。
+
+### 构建、单元测试与静态检查
+
+```powershell
+$env:JAVA_HOME = 'D:\Program Files\Java\jdk-21.0.11'
+.\gradlew.bat assembleDebug assembleDebugAndroidTest testDebugUnitTest lintDebug --console=plain
+```
+
+四项 Gradle 任务在同一次运行中成功，耗时 33 秒；43/43 项 JVM 测试通过，其中 `PreviewViewportTest` 为 13 项。Lint 为 0 错误、12 条警告。
+
+### 相关界面回归
+
+| 系统 | 回归范围 | 结果 | 耗时 | 原始日志 |
+| --- | --- | --- | ---: | --- |
+| API 31 / emulator-5554 | 四项 UI 测试类 | 21/21 通过 | 143.932 秒 | [API 31](test-editor-header-api31.txt) |
+| API 36 / emulator-5556 | 四项 UI 测试类 | 21/21 通过 | 185.485 秒 | [API 36](test-editor-header-api36.txt) |
+
+范围为 `EditorLayoutUiTest`（6 项）、`EditorUiTest`（3 项）、`EditorV11UiTest`（8 项）和 `EditorV12UiTest`（4 项）。调色、曲线、HSL、预设、文字与裁剪展开时均验证标题栏隐藏，工作区回收精确 56dp；收起、应用或取消后标题栏及更换图片、导出入口恢复。参数选择、未应用编辑、100% 查看倍率、高清区域与查看中心保持；宽屏直方图和溢出入口随标题栏切换位置，每项入口唯一且可操作。
+
+既有撤销、重做、原图按住对比、曲线控制点真实拖动、文字/裁剪坐标映射及真实键盘上的中文多行输入检查一同通过。
+
+### 小屏横竖屏与实际截图
+
+| 系统 | 测试尺寸 | 布局回归 | 耗时 | 原始日志 |
+| --- | --- | --- | ---: | --- |
+| API 31 | 360×640dp | 6/6 通过 | 57.589 秒 | [竖屏](test-editor-header-api31-small-portrait.txt) |
+| API 31 | 640×360dp | 6/6 通过 | 52.894 秒 | [横屏](test-editor-header-api31-small-landscape.txt) |
+| API 36 | 360×640dp | 6/6 通过 | 73.381 秒 | [竖屏](test-editor-header-api36-small-portrait.txt) |
+| API 36 | 640×360dp | 6/6 通过 | 59.962 秒 | [横屏](test-editor-header-api36-small-landscape.txt) |
+
+两台模拟器使用 density 160 的尺寸覆盖运行 `EditorLayoutUiTest`，验证六工具标题栏隐藏与恢复、工作区高度、参数与倍率保持、分析入口迁移及曲线拖点、真实中文多行输入。
+
+已目视检查以下 API 36 原始截图，保留完整屏幕，未裁切或重绘：
+
+- [展开工具后隐藏标题栏](screenshots/editor-header-expanded.png)、[收起工具后恢复标题栏](screenshots/editor-header-collapsed.png)：基线 1080×2400。
+- [360×640 竖屏](screenshots/editor-header-portrait.png)、[640×360 横屏](screenshots/editor-header-landscape.png)：小屏布局。
+
+宽屏收起状态、全部六项工具和真实键盘的补充原始证据保存在本机 `dist/header-layout-validation/`。验收结束后已核对两台模拟器恢复到 1080×2400、density 420、自动旋转开启（`accelerometer_rotation=1`）、`user_rotation=0`；硬件键盘显示设置恢复为 API 31 的 1、API 36 的 0。
+
+### 当前构建包核验
+
+本轮构建与设备验收使用的同一包已归档为 `dist/ImageEditApp-debug.apk`，30,379,405 字节，SHA-256 为 `2E7D23637DDEA1F52F533374B81C5AF5BEA54982B0F663D27271A4330EF41740`。`apksigner verify --verbose` 通过（v2 签名有效），`zipalign -c -P 16 4` 通过。
+
+以下保留标题栏条件隐藏之前的验收历史，测试结果、截图和 APK 哈希对应各轮当时构建。
+
+## 2026-10-10 · 图片操作按钮位置调整（未发布）
+
+本轮构建版本为 1.2.0 / versionCode 3 Debug。图片右下角的倍率文字、“适配”和“100%”按钮已移除；撤销、重做、按住查看原图改为图片预览右下角浮层中的三个 48dp 按钮，顶栏相应简化。双指缩放、平移及双击切换适配/100% 的操作保留，编辑配方与撤销规则沿用原有格式。
+
+原图对比按下时消费指针事件，并使用 `try/finally` 在松手、取消或手势终止时恢复编辑效果。图片画布新增 `PreviewPixelScaleKey` 与 `PreviewViewportModeKey` 语义属性，供界面验收读取实际像素倍率和查看模式，不增加可见倍率控件。
+
+### 已完成的构建与单元测试
+
+```powershell
+$env:JAVA_HOME = 'D:\Program Files\Java\jdk-21.0.11'
+.\gradlew.bat assembleDebug testDebugUnitTest --console=plain
+.\gradlew.bat assembleDebugAndroidTest lintDebug --console=plain
+```
+
+四项 Gradle 任务成功；43/43 项 JVM 测试通过。Lint 为 0 错误、12 条警告。
+
+### 相关界面回归
+
+| 系统 | 回归范围 | 结果 | 耗时 | 原始日志 |
+| --- | --- | --- | ---: | --- |
+| API 31 / emulator-5554 | 四项 UI 测试类 | 21/21 通过 | 142.076 秒 | [API 31](test-preview-actions-api31.txt) |
+| API 36 / emulator-5556 | 四项 UI 测试类 | 21/21 通过 | 179.425 秒 | [API 36](test-preview-actions-api36.txt) |
+
+范围为 `EditorLayoutUiTest`（6 项）、`EditorUiTest`（3 项）、`EditorV11UiTest`（8 项）和 `EditorV12UiTest`（4 项）。验证按钮处于预览右下角、三项操作各只有一个实例、旧缩放控件缺席；撤销/重做可操作，按住对比时原图像素确有变化，松手恢复编辑像素，配方、撤销状态与视口不被对比修改。缩放测试改用真实双击与双指手势，避开右下角按钮，保留高清区域和文字/裁剪拖动坐标检查。
+
+新布局的 [基线竖屏截图](screenshots/editor-actions-normal.png) 保留原始屏幕尺寸。图片画布尺寸不因按钮移动而改变。
+
+### 小屏横竖屏
+
+| 系统 | 测试尺寸 | 布局回归 | 耗时 | 原始日志 |
+| --- | --- | --- | ---: | --- |
+| API 31 | 360×640dp | 6/6 通过 | 55.024 秒 | [竖屏](test-preview-actions-api31-small-portrait.txt) |
+| API 31 | 640×360dp | 6/6 通过 | 41.797 秒 | [横屏](test-preview-actions-api31-small-landscape.txt) |
+| API 36 | 360×640dp | 6/6 通过 | 68.054 秒 | [竖屏](test-preview-actions-api36-small-portrait.txt) |
+| API 36 | 640×360dp | 6/6 通过 | 50.007 秒 | [横屏](test-preview-actions-api36-small-landscape.txt) |
+
+两台模拟器使用 density 160 的尺寸覆盖运行 `EditorLayoutUiTest`；按钮完整位于画布右下角，收起/展开及六项工具切换保持位置，点击对比不被画布识别为双击缩放。既有真实键盘、中文多行输入、曲线拖点和缩放保持检查一同通过。目视检查 [360×640 新布局](screenshots/editor-actions-portrait.png) 和 [640×360 新布局](screenshots/editor-actions-landscape.png)，旧倍率控件缺席，顶栏与操作浮层正常。
+
+验收后恢复两台模拟器的 1080×2400、density 420、自动旋转；硬件键盘显示设置分别恢复为 API 31 的 1、API 36 的 0。
+
+### 当前构建包核验
+
+本轮验证的同一安装包已归档为 `dist/ImageEditApp-debug.apk`，30,379,405 字节，SHA-256 为 `D43DAAFD6813CBB421F51398795DF65AE0E31EE8B832E2F24A920C6D5142E6D8`。`apksigner verify --verbose` 通过（v2 签名有效），`zipalign -c -P 16 4` 通过。
+
+以下保留 2026-10-09 的验收历史，测试结果与 APK 哈希对应当时构建。
+
 ## 2026-10-09 · 编辑操作与布局优化（未发布）
 
 本轮验证包为 1.2.0 / versionCode 3 Debug，覆盖六项工具、窄屏底部面板、宽屏侧栏、独立文字输入窗口及查看视口。业务接口、编辑配方和草稿结构沿用原有格式。

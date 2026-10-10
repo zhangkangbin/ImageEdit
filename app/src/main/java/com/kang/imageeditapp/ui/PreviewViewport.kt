@@ -5,6 +5,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.SemanticsPropertyKey
 import com.kang.imageeditapp.model.CropRect
 import kotlin.math.max
 import kotlin.math.min
@@ -13,6 +14,10 @@ import kotlin.math.min
 data class PreviewViewport(val zoom: Float = 1f, val panX: Float = 0f, val panY: Float = 0f)
 
 enum class PreviewViewportMode { FIT, CUSTOM }
+
+/** Nonvisual view metadata for UI verification; it does not enter the edit recipe. */
+val PreviewPixelScaleKey = SemanticsPropertyKey<Float>("PreviewPixelScale")
+val PreviewViewportModeKey = SemanticsPropertyKey<PreviewViewportMode>("PreviewViewportMode")
 
 /**
  * Owned by the editing workspace so opening panels or recreating the canvas does not lose the view.

@@ -98,13 +98,14 @@ class EditorV11UiTest {
     }
 
     private fun pinchOut(tag: String = "photo-canvas") {
+        val point = compose.safePreviewPoint()
         compose.onNodeWithTag(tag).performTouchInput {
-            down(0, center - Offset(35f, 0f))
-            down(1, center + Offset(35f, 0f))
+            down(0, point - Offset(35f, 0f))
+            down(1, point + Offset(35f, 0f))
             for (step in 1..5) {
                 advanceEventTime(32)
-                moveTo(0, center - Offset(35f + step * 15f, 0f))
-                moveTo(1, center + Offset(35f + step * 15f, 0f))
+                moveTo(0, point - Offset(35f + step * 15f, 0f))
+                moveTo(1, point + Offset(35f + step * 15f, 0f))
             }
             up(0); up(1)
         }
@@ -127,13 +128,15 @@ class EditorV11UiTest {
         awaitPreview()
         val expected = model.state.value.recipe
         compose.waitUntil(10_000) { model.state.value.draft?.recipe == expected }
-        compose.onNodeWithTag("action-back").performClick()
+        compose.onNodeWithTag("editor-header").assertIsDisplayed()
+        compose.onNodeWithTag("action-back").assertIsDisplayed().performClick()
         compose.onNodeWithText("结束编辑").performClick()
         compose.onNodeWithTag("continue-draft").performScrollTo().assertIsDisplayed().performClick()
         awaitPreview()
         assertEquals(expected, model.state.value.recipe)
         assertFalse(model.state.value.canUndo)
-        compose.onNodeWithTag("action-back").performClick()
+        compose.onNodeWithTag("editor-header").assertIsDisplayed()
+        compose.onNodeWithTag("action-back").assertIsDisplayed().performClick()
         compose.onNodeWithText("结束编辑").performClick()
         compose.onNodeWithTag("delete-draft").performScrollTo().performClick()
         compose.onNodeWithTag("confirm-delete-draft").performClick()
@@ -163,22 +166,21 @@ class EditorV11UiTest {
         compose.onNodeWithTag("histogram-plot").assertDoesNotExist()
     }
 
-    @Test fun nativeButtonAndDoubleTapDecodeVisibleOriginalPixelsWithoutChangingAnalysis() {
+    @Test fun doubleTapTogglesFitAndOriginalPixelsWithoutChangingAnalysis() {
         importFixture()
         val before = model.state.value
         val red = before.analysis!!.red.copyOf()
         assertTrue(before.preview!!.width < before.source!!.width)
-        compose.onNodeWithTag("zoom-native").performClick()
-        compose.onNodeWithTag("zoom-percent").assertTextEquals("100%")
+        compose.showNativePreview()
         awaitDetail()
         assertTrue(model.state.value.detail!!.bounds.width < 1f)
-        compose.onNodeWithTag("photo-canvas").performTouchInput { swipe(center, center + Offset(60f, 30f), 300) }
+        val point = compose.safePreviewPoint()
+        compose.onNodeWithTag("photo-canvas").performTouchInput { swipe(point, point - Offset(60f, 0f), 300) }
         compose.waitForIdle()
         assertArrayEquals(red, model.state.value.analysis!!.red)
         assertEquals(before.recipe, model.state.value.recipe)
-        compose.onNodeWithTag("zoom-fit").performClick()
-        compose.onNodeWithTag("photo-canvas").performTouchInput { doubleClick(center) }
-        compose.onNodeWithTag("zoom-percent").assertTextEquals("100%")
+        compose.fitPreview()
+        compose.showNativePreview()
         awaitDetail()
     }
 
@@ -195,7 +197,7 @@ class EditorV11UiTest {
             assertEquals("Two fingers must not change $tool", before.recipe, model.state.value.recipe)
             assertEquals(before.canUndo, model.state.value.canUndo)
             assertEquals(before.canRedo, model.state.value.canRedo)
-            compose.onNodeWithTag("zoom-fit").performClick()
+            compose.fitPreview()
             compose.onNodeWithTag("cancel-tool").performClick()
             awaitPreview()
         }
@@ -206,19 +208,31 @@ class EditorV11UiTest {
         compose.runOnIdle { model.updateRecipe(model.state.value.recipe.copy(watermark = Watermark(text = "中文水印", x = .5f, y = .5f))) }
         clickTool("text")
         awaitPreview()
-        compose.onNodeWithTag("zoom-native").performClick()
+        compose.showNativePreview()
         awaitDetail()
-        compose.onNodeWithTag("watermark-canvas").performTouchInput { swipe(center, center + Offset(90f, 40f), 300) }
-        assertEquals(.55f, model.state.value.recipe.watermark.x, .012f)
-        assertEquals(.5f + 40f / 1200, model.state.value.recipe.watermark.y, .012f)
+        val textPoint = compose.safePreviewPoint()
+        val textCanvas = compose.onNodeWithTag("photo-canvas").fetchSemanticsNode().boundsInRoot
+        val region = model.state.value.detail!!.bounds
+        val textX = if (1800f >= textCanvas.width) region.left + textPoint.x / 1800f else .5f + (textPoint.x - textCanvas.width / 2f) / 1800f
+        val textY = if (1200f >= textCanvas.height) region.top + textPoint.y / 1200f else .5f + (textPoint.y - textCanvas.height / 2f) / 1200f
+        compose.runOnIdle {
+            val recipe = model.state.value.recipe
+            model.updateRecipe(recipe.copy(watermark = recipe.watermark.copy(x = textX, y = textY)))
+        }
+        awaitPreview()
+        awaitDetail()
+        compose.onNodeWithTag("watermark-canvas").performTouchInput { swipe(textPoint, textPoint + Offset(90f, 40f), 300) }
+        assertEquals(textX + 90f / 1800f, model.state.value.recipe.watermark.x, .012f)
+        assertEquals(textY + 40f / 1200f, model.state.value.recipe.watermark.y, .012f)
         compose.onNodeWithTag("apply-tool").performClick()
         clickTool("crop")
-        compose.runOnIdle { model.updateRecipe(model.state.value.recipe.copy(crop = CropRect(.25f, .25f, .75f, .75f))) }
+        compose.runOnIdle { model.updateRecipe(model.state.value.recipe.copy(crop = CropRect(0f, .25f, .5f, .75f))) }
         awaitPreview()
-        compose.onNodeWithTag("zoom-native").performClick()
+        compose.showNativePreview()
         awaitDetail()
-        compose.onNodeWithTag("crop-canvas").performTouchInput { swipe(center, center + Offset(90f, 40f), 300) }
-        assertEquals(.30f, model.state.value.recipe.crop.left, .012f)
+        val cropPoint = compose.safePreviewPoint()
+        compose.onNodeWithTag("crop-canvas").performTouchInput { swipe(cropPoint, cropPoint + Offset(90f, 40f), 300) }
+        assertEquals(.05f, model.state.value.recipe.crop.left, .012f)
         assertEquals(.25f + 40f / 1200, model.state.value.recipe.crop.top, .012f)
         assertEquals(.5f, model.state.value.recipe.crop.width, .001f)
     }
@@ -228,8 +242,7 @@ class EditorV11UiTest {
         importFixture()
         compose.runOnIdle { model.updateRecipe(model.state.value.recipe.copy(crop = CropRect(.45f, .45f, .55f, .55f))) }
         awaitPreview()
-        compose.onNodeWithTag("zoom-native").performClick()
-        compose.onNodeWithTag("zoom-percent").assertTextEquals("100%")
+        compose.showNativePreview()
         awaitDetail()
         val detail = model.state.value.detail!!
         assertEquals(410, detail.bitmap.width)
@@ -243,7 +256,7 @@ class EditorV11UiTest {
         importFixture()
         compose.onNodeWithTag("toggle-clipping").performClick()
         val fit = compose.onNodeWithTag("photo-canvas").captureToImage().toPixelMap().let { it[it.width / 2, it.height / 2] }
-        compose.onNodeWithTag("zoom-native").performClick()
+        compose.showNativePreview()
         awaitDetail()
         val native = compose.onNodeWithTag("photo-canvas").captureToImage().toPixelMap().let { it[it.width / 2, it.height / 2] }
         assertTrue(abs(fit.red - native.red) < .012f)
@@ -253,7 +266,7 @@ class EditorV11UiTest {
 
     @Test fun rapidAdjustmentsPublishMatchingFinalAnalysisAndDetail() {
         importFixture()
-        compose.onNodeWithTag("zoom-native").performClick()
+        compose.showNativePreview()
         awaitDetail()
         // Start a larger decode/render, then replace its parameters and region while it runs.
         compose.runOnIdle { model.requestDetail(CropRect(), 2400, 1600) }

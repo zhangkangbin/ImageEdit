@@ -13,6 +13,7 @@ import android.view.accessibility.AccessibilityWindowInfo
 import android.view.inspector.WindowInspector
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.lifecycle.ViewModelProvider
@@ -21,6 +22,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.kang.imageeditapp.model.CropRect
 import com.kang.imageeditapp.model.EditorTool
 import com.kang.imageeditapp.model.Geometry
+import com.kang.imageeditapp.ui.PreviewViewportMode
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
@@ -88,13 +90,55 @@ class EditorLayoutUiTest {
 
     private fun bounds(tag: String): Rect = compose.onNodeWithTag(tag).fetchSemanticsNode().boundsInRoot
 
+    private fun assertHeaderHidden() {
+        compose.onNodeWithTag("editor-header").assertDoesNotExist()
+        compose.onNodeWithTag("open-export").assertDoesNotExist()
+        compose.onNodeWithTag("replace-photo").assertDoesNotExist()
+    }
+
+    private fun assertHeaderRestored(): Rect {
+        compose.onNodeWithTag("editor-header").assertIsDisplayed()
+        compose.onNodeWithTag("open-export").assertIsDisplayed()
+        compose.onNodeWithTag("replace-photo").assertIsDisplayed()
+        return bounds("editor-header").also {
+            assertEquals("The restored title bar should be 56dp high", 56f * compose.activity.resources.displayMetrics.density, it.height, 1f)
+        }
+    }
+
+    private fun assertAnalysisControlsIn(parentTag: String) {
+        val parent = bounds(parentTag)
+        for (tag in listOf("toggle-histogram", "toggle-clipping")) {
+            compose.onAllNodesWithTag(tag).assertCountEquals(1)
+            compose.onNodeWithTag(tag).assertIsDisplayed()
+            val control = bounds(tag)
+            assertTrue("$tag should remain reachable in $parentTag: parent=$parent control=$control", parent.contains(control.center))
+        }
+    }
+
     private fun assertSameSize(expected: Rect, actual: Rect) {
         assertEquals("Preview width must stay stable", expected.width, actual.width, 1f)
         assertEquals("Preview height must stay stable", expected.height, actual.height, 1f)
     }
 
+    private fun assertActionsInPreview() {
+        val stage = bounds("preview-stage")
+        val actions = bounds("preview-actions")
+        val density = compose.activity.resources.displayMetrics.density
+        assertTrue("Actions belong inside the preview: stage=$stage actions=$actions", actions.left >= stage.left && actions.top >= stage.top && actions.right <= stage.right + 1f && actions.bottom <= stage.bottom + 1f)
+        assertTrue("Actions belong in the lower-right corner", actions.center.x >= stage.center.x && actions.center.y >= stage.center.y)
+        assertTrue("Actions should stay near the right and bottom edges", stage.right - actions.right <= 48f * density && stage.bottom - actions.bottom <= 48f * density)
+        for (tag in listOf("preview-actions", "action-undo", "action-redo", "compare")) {
+            compose.onAllNodesWithTag(tag).assertCountEquals(1)
+            compose.onNodeWithTag(tag).assertIsDisplayed()
+        }
+        for (removed in listOf("zoom-percent", "zoom-fit", "zoom-native")) compose.onNodeWithTag(removed).assertDoesNotExist()
+    }
+
     private fun selectTool(tag: String) {
-        if (model.state.value.activeTool?.name?.lowercase() == tag) return
+        if (model.state.value.activeTool?.name?.lowercase() == tag) {
+            assertHeaderHidden()
+            return
+        }
         val previousDetail = model.state.value.detail
         val previousTool = model.state.value.activeTool
         clickTool(tag)
@@ -102,6 +146,7 @@ class EditorLayoutUiTest {
         if (previousDetail != null && model.state.value.activeTool != previousTool) {
             compose.waitUntil(30_000) { model.state.value.detail?.let { it !== previousDetail } == true }
         }
+        assertHeaderHidden()
     }
 
     private fun clickTool(tag: String) {
@@ -117,9 +162,11 @@ class EditorLayoutUiTest {
         if (previousDetail != null) {
             compose.waitUntil(30_000) { model.state.value.detail?.let { it !== previousDetail } == true }
         }
+        assertHeaderRestored()
     }
 
     private fun adjustExposure() {
+        compose.onNodeWithTag("adjust-曝光").performScrollTo().performClick()
         compose.onNodeWithTag("slider-曝光").performScrollTo().performTouchInput {
             swipe(center, Offset(width * .75f, center.y), durationMillis = 300)
         }
@@ -128,10 +175,15 @@ class EditorLayoutUiTest {
     }
 
     @Test fun everyToolReservesTheSamePreviewSpace() {
+        val header = assertHeaderRestored()
+        val idleWorkspace = bounds("editor-workspace")
         selectTool("adjust")
         val stage = bounds("preview-stage")
         val canvas = bounds("photo-canvas")
         val workspace = bounds("editor-workspace")
+        assertEquals("Opening a tool should give the entire title bar height to the workspace", idleWorkspace.height + header.height, workspace.height, 1f)
+        assertEquals("The workspace should start at the reclaimed title bar position", header.top, workspace.top, 1f)
+        assertEquals("Opening a tool should keep the workspace bottom in place", idleWorkspace.bottom, workspace.bottom, 1f)
         if (!wide) {
             assertTrue("Portrait preview should keep most of the workspace", stage.height >= workspace.height * .56f)
             assertTrue("Portrait controls belong below the preview", bounds("tool-panel").top >= stage.bottom - 1f)
@@ -142,8 +194,10 @@ class EditorLayoutUiTest {
         assertTrue("Preview must have a usable drawing area", canvas.width > 0f && canvas.height > 0f)
         for (tool in tools) {
             selectTool(tool)
+            assertSameSize(workspace, bounds("editor-workspace"))
             assertSameSize(stage, bounds("preview-stage"))
             assertSameSize(canvas, bounds("photo-canvas"))
+            assertActionsInPreview()
             compose.onNodeWithTag("tool-panel").assertIsDisplayed()
             compose.onNodeWithTag("toggle-tool-panel").assertIsDisplayed()
             compose.onNodeWithTag("apply-tool").assertIsDisplayed()
@@ -160,6 +214,8 @@ class EditorLayoutUiTest {
             }
             assertSameSize(canvas, bounds("photo-canvas"))
         }
+        finishTool("cancel-tool")
+        assertSameSize(idleWorkspace, bounds("editor-workspace"))
     }
 
     @Test fun collapsingThePanelKeepsEditsCancelableAndApplicable() {
@@ -171,39 +227,54 @@ class EditorLayoutUiTest {
         }
         selectTool("adjust")
         val initial = model.state.value.recipe
-        // Button taps must not bubble into the canvas's native-size double-tap gesture.
-        compose.onNodeWithTag("zoom-fit").performTouchInput { doubleClick(center) }
+        // Taps on the moved comparison control must not become canvas double taps.
+        compose.onNodeWithTag("compare").performTouchInput { doubleClick(center) }
+        compose.onNodeWithTag("compare").assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "编辑效果"))
         assertFitsCanvas()
         // Panning a fitted photo is a no-op and must keep fit mode for the next resize.
-        compose.onNodeWithTag("photo-canvas").performTouchInput { swipe(center, center + Offset(40f, 30f), 300) }
+        val point = compose.safePreviewPoint()
+        compose.onNodeWithTag("photo-canvas").performTouchInput { swipe(point, point + Offset(40f, 30f), 300) }
         assertEquals(initial, model.state.value.recipe)
         adjustExposure()
+        compose.onNodeWithTag("adjust-亮度").performScrollTo().performClick()
         val edited = model.state.value.recipe
         val before = bounds("preview-stage")
+        val expandedWorkspace = bounds("editor-workspace")
         val undoBefore = model.state.value.canUndo
         // Tapping the selected navigation tool also toggles its panel.
         clickTool("adjust")
         compose.waitForIdle()
+        val header = assertHeaderRestored()
+        assertEquals("Restoring the title bar should use only its own height", expandedWorkspace.height - header.height, bounds("editor-workspace").height, 1f)
         val collapsed = bounds("preview-stage")
         assertTrue("Collapsing must release preview space", collapsed.height > before.height || collapsed.width > before.width)
+        assertActionsInPreview()
         assertFitsCanvas()
         assertEquals(edited, model.state.value.recipe)
         assertEquals(EditorTool.ADJUST, model.state.value.activeTool)
         assertEquals(undoBefore, model.state.value.canUndo)
+        captureEvidence("collapsed")
+        compose.onNodeWithTag("toggle-tool-panel").performClick()
+        assertHeaderHidden()
+        assertSameSize(expandedWorkspace, bounds("editor-workspace"))
+        assertSameSize(before, bounds("preview-stage"))
+        compose.onNodeWithTag("slider-亮度").performScrollTo().assertIsDisplayed()
+        assertEquals("Reopening should retain the selected parameter and its edits", edited, model.state.value.recipe)
+        assertFitsCanvas()
+        compose.onNodeWithTag("toggle-tool-panel").performClick()
+        assertHeaderRestored()
         compose.onNodeWithTag("cancel-tool").assertIsDisplayed().performClick()
         awaitPreview()
+        assertHeaderRestored()
         assertEquals(initial, model.state.value.recipe)
         assertFalse(model.state.value.canUndo)
 
         selectTool("adjust")
-        if (compose.onAllNodesWithTag("slider-曝光").fetchSemanticsNodes().isEmpty()) {
-            compose.onNodeWithTag("toggle-tool-panel").performClick()
-        }
         adjustExposure()
         val applied = model.state.value.recipe
-        compose.onNodeWithTag("toggle-tool-panel").performClick()
         compose.onNodeWithTag("apply-tool").assertIsDisplayed().performClick()
         awaitPreview()
+        assertHeaderRestored()
         assertEquals(applied, model.state.value.recipe)
         assertNull(model.state.value.activeTool)
     }
@@ -213,12 +284,13 @@ class EditorLayoutUiTest {
         val canvas = bounds("photo-canvas")
         val state = model.state.value
         val output = Geometry.outputSize(state.source!!, state.recipe)
-        val percent = (min(canvas.width / output.width, canvas.height / output.height) * 100f).roundToInt()
-        compose.onNodeWithTag("zoom-percent").assertTextEquals("$percent%")
+        val scale = min(canvas.width / output.width, canvas.height / output.height)
+        assertEquals(PreviewViewportMode.FIT, compose.previewMode())
+        assertEquals(scale, compose.previewPixelScale(), .0001f)
     }
 
     private fun awaitNativeBounds(): CropRect {
-        compose.onNodeWithTag("zoom-percent").assertTextEquals("100%")
+        assertEquals(1f, compose.previewPixelScale(), .0001f)
         compose.waitUntil(30_000) {
             val state = model.state.value
             val detail = state.detail
@@ -238,13 +310,14 @@ class EditorLayoutUiTest {
     }
 
     @Test fun switchingApplyingAndCancelingToolsKeepNativeScaleAndCenter() {
-        compose.onNodeWithTag("zoom-native").performClick()
-        awaitNativeBounds()
-        compose.onNodeWithTag("photo-canvas").performTouchInput { swipe(center, center + Offset(90f, 0f), 300) }
+        compose.showNativePreview()
+        val beforePan = awaitNativeBounds()
+        val point = compose.safePreviewPoint()
+        compose.onNodeWithTag("photo-canvas").performTouchInput { swipe(point, point - Offset(90f, 0f), 300) }
         val canvasWidth = bounds("photo-canvas").width
         compose.waitUntil(30_000) {
             val region = model.state.value.detail?.bounds
-            region != null && (canvasWidth >= 1800f || (region.left + region.right) / 2f < .49f)
+            region != null && (canvasWidth >= 1800f || (region.left + region.right) / 2f > (beforePan.left + beforePan.right) / 2f + .005f)
         }
         val expectedBounds = awaitNativeBounds()
         val initial = model.state.value.recipe
@@ -255,6 +328,21 @@ class EditorLayoutUiTest {
             assertEquals(initial, model.state.value.recipe)
             assertFalse(model.state.value.canUndo)
         }
+        // The title bar returns when folded; native scale and the image center survive both resizes.
+        compose.onNodeWithTag("toggle-tool-panel").performClick()
+        assertHeaderRestored()
+        assertNativeCenter(expectedBounds)
+        assertEquals(initial, model.state.value.recipe)
+        // Choosing another tool from a folded panel must open it and hide the title bar immediately.
+        selectTool("adjust")
+        assertNativeCenter(expectedBounds)
+        compose.onNodeWithTag("toggle-tool-panel").performClick()
+        assertHeaderRestored()
+        assertNativeCenter(expectedBounds)
+        compose.onNodeWithTag("toggle-tool-panel").performClick()
+        assertHeaderHidden()
+        assertNativeCenter(expectedBounds)
+        assertEquals(initial, model.state.value.recipe)
         finishTool("apply-tool")
         assertNativeCenter(expectedBounds)
 
@@ -275,6 +363,7 @@ class EditorLayoutUiTest {
 
     @Test fun histogramExpansionKeepsCanvasDimensionsAndEditingState() {
         selectTool("curves")
+        assertAnalysisControlsIn("preview-stage")
         val stage = bounds("preview-stage")
         val canvas = bounds("photo-canvas")
         val before = model.state.value
@@ -287,6 +376,28 @@ class EditorLayoutUiTest {
         compose.onNodeWithTag("toggle-histogram").performClick()
         compose.onNodeWithTag("histogram-plot").assertDoesNotExist()
         assertSameSize(canvas, bounds("photo-canvas"))
+
+        // Wide layouts move the same controls to the restored header without changing edits.
+        compose.onNodeWithTag("toggle-tool-panel").performClick()
+        assertHeaderRestored()
+        assertAnalysisControlsIn(if (wide) "editor-header" else "preview-stage")
+        val collapsedCanvas = bounds("photo-canvas")
+        compose.onNodeWithTag("toggle-histogram").performClick()
+        compose.onNodeWithTag("histogram-plot").assertIsDisplayed()
+        assertSameSize(collapsedCanvas, bounds("photo-canvas"))
+        compose.onNodeWithTag("toggle-clipping").performClick()
+        assertSameSize(collapsedCanvas, bounds("photo-canvas"))
+        compose.onNodeWithTag("toggle-tool-panel").performClick()
+        assertHeaderHidden()
+        assertAnalysisControlsIn("preview-stage")
+        compose.onNodeWithTag("histogram-plot").assertIsDisplayed()
+        assertSameSize(canvas, bounds("photo-canvas"))
+        compose.onNodeWithTag("toggle-histogram").performClick()
+        compose.onNodeWithTag("histogram-plot").assertDoesNotExist()
+        compose.onNodeWithTag("toggle-clipping").performClick()
+        assertSameSize(canvas, bounds("photo-canvas"))
+        assertEquals(before.recipe, model.state.value.recipe)
+        assertEquals(before.canUndo, model.state.value.canUndo)
     }
 
     @Test fun textDialogCancellationDiscardsDraftAndConfirmationCreatesOneUndoStep() {
@@ -299,6 +410,7 @@ class EditorLayoutUiTest {
         assertFalse(model.state.value.canUndo)
         compose.onNodeWithTag("cancel-watermark-text").performClick()
         compose.onNodeWithTag("watermark-text").assertDoesNotExist()
+        assertHeaderHidden()
         assertEquals(initial, model.state.value.recipe)
         assertSameSize(canvas, bounds("photo-canvas"))
 
@@ -308,6 +420,7 @@ class EditorLayoutUiTest {
         compose.onNodeWithTag("confirm-watermark-text").performClick()
         awaitPreview()
         assertEquals("第一行\n第二行", model.state.value.recipe.watermark.text)
+        assertHeaderHidden()
         assertTrue(model.state.value.canUndo)
         assertSameSize(canvas, bounds("photo-canvas"))
         compose.onNodeWithTag("action-undo").performClick()
@@ -319,6 +432,7 @@ class EditorLayoutUiTest {
         assertEquals("第一行\n第二行", model.state.value.recipe.watermark.text)
         compose.onNodeWithTag("cancel-tool").performClick()
         awaitPreview()
+        assertHeaderRestored()
         assertEquals(initial, model.state.value.recipe)
         assertFalse(model.state.value.canUndo)
     }
@@ -494,10 +608,12 @@ class EditorLayoutUiTest {
         val output = Geometry.outputSize(model.state.value.source!!, model.state.value.recipe)
         assertEquals(output.width, output.height)
         compose.onNodeWithTag("toggle-tool-panel").performClick()
+        assertHeaderRestored()
         compose.onNodeWithTag("apply-tool").assertIsDisplayed()
         compose.onNodeWithTag("cancel-tool").assertIsDisplayed()
         assertEquals(cropped, model.state.value.recipe.crop)
         compose.onNodeWithTag("toggle-tool-panel").performClick()
+        assertHeaderHidden()
         compose.onNodeWithTag("crop-1:1").performScrollTo().assertIsDisplayed()
         assertEquals("The selected crop must survive panel folding", cropped, model.state.value.recipe.crop)
         captureEvidence("crop")

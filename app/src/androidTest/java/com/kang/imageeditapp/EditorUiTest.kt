@@ -8,6 +8,8 @@ import android.graphics.Paint
 import android.net.Uri
 import android.os.ParcelFileDescriptor
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.toPixelMap
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.lifecycle.ViewModelProvider
@@ -84,12 +86,44 @@ class EditorUiTest {
         compose.onNodeWithTag("apply-tool").performClick()
         awaitPreview()
         assertNull(model.state.value.activeTool)
+        compose.onNodeWithTag("editor-header").assertIsDisplayed()
     }
 
     private fun clickTool(tag: String) {
         val node = compose.onNodeWithTag("tool-$tag")
         if (compose.activity.resources.configuration.screenWidthDp >= 600) node.performScrollTo()
         node.assertIsDisplayed().performClick()
+    }
+
+    private fun assertHoldingCompareShowsOriginalAndRestoresTheEdit() {
+        val before = model.state.value
+        val scale = compose.previewPixelScale()
+        val mode = compose.previewMode()
+        val canvas = compose.onNodeWithTag("photo-canvas")
+        val canvasBefore = canvas.fetchSemanticsNode().boundsInRoot
+        val edited = canvas.captureToImage().toPixelMap().let { it[it.width / 2, it.height / 2] }
+        compose.onNodeWithTag("compare").performTouchInput { down(center); advanceEventTime(600) }
+        try {
+            compose.onNodeWithTag("compare").assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "原图"))
+            val original = canvas.captureToImage().toPixelMap().let { it[it.width / 2, it.height / 2] }
+            assertTrue("Holding comparison must display the original pixels", abs(edited.red - original.red) + abs(edited.green - original.green) + abs(edited.blue - original.blue) > .06f)
+            assertEquals(canvasBefore, canvas.fetchSemanticsNode().boundsInRoot)
+            assertEquals(before.recipe, model.state.value.recipe)
+            assertEquals(before.canUndo, model.state.value.canUndo)
+            assertEquals(before.canRedo, model.state.value.canRedo)
+            assertEquals(scale, compose.previewPixelScale(), .0001f)
+            assertEquals(mode, compose.previewMode())
+        } finally {
+            compose.onNodeWithTag("compare").performTouchInput { up() }
+        }
+        compose.onNodeWithTag("compare").assert(SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "编辑效果"))
+        val restored = canvas.captureToImage().toPixelMap().let { it[it.width / 2, it.height / 2] }
+        assertEquals(edited.red, restored.red, .012f)
+        assertEquals(edited.green, restored.green, .012f)
+        assertEquals(edited.blue, restored.blue, .012f)
+        assertEquals(before.recipe, model.state.value.recipe)
+        assertEquals(scale, compose.previewPixelScale(), .0001f)
+        assertEquals(mode, compose.previewMode())
     }
 
     @Test fun editThroughEveryToolAndExportBothFormats() {
@@ -99,10 +133,12 @@ class EditorUiTest {
         assertTrue(model.state.value.recipe.adjustments.exposure > .2f)
         applyTool()
         val colored = model.state.value.recipe
-        compose.onNodeWithTag("action-undo").performClick()
+        compose.onNodeWithTag("action-undo").assertIsDisplayed().assertIsEnabled().performClick()
         assertEquals(0f, model.state.value.recipe.adjustments.exposure, .001f)
-        compose.onNodeWithTag("action-redo").performClick()
+        compose.onNodeWithTag("action-redo").assertIsDisplayed().assertIsEnabled().performClick()
         assertEquals(colored, model.state.value.recipe)
+        awaitPreview()
+        assertHoldingCompareShowsOriginalAndRestoresTheEdit()
 
         clickTool("adjust")
         compose.onNodeWithTag("adjust-亮度").performScrollTo().performClick()
@@ -175,7 +211,8 @@ class EditorUiTest {
         assertEquals("你好，光影", model.state.value.recipe.watermark.text)
 
         for (format in ExportFormat.entries) {
-            compose.onNodeWithTag("open-export").performClick()
+            compose.onNodeWithTag("editor-header").assertIsDisplayed()
+            compose.onNodeWithTag("open-export").assertIsDisplayed().performClick()
             compose.onNodeWithTag("format-${format.name}").performClick()
             compose.onNodeWithTag("save-photo").performClick()
             compose.waitUntil(30_000) { model.state.value.savedUri != null || model.state.value.error != null }
@@ -206,7 +243,7 @@ class EditorUiTest {
         slider("曝光")
         applyTool()
         val before = model.state.value
-        compose.onNodeWithTag("replace-photo").performClick()
+        compose.onNodeWithTag("replace-photo").assertIsDisplayed().performClick()
         awaitSystemActivity("PhotoPickerActivity|PickImagesActivity|Photopicker|DocumentsActivity|PickActivity|photopicker")
         systemBack()
         compose.onNodeWithTag("tool-adjust").assertIsDisplayed()
@@ -230,6 +267,7 @@ class EditorUiTest {
         assertEquals(EditRecipe(), model.state.value.recipe)
         assertNull(model.state.value.activeTool)
         assertNotNull(model.state.value.source)
+        compose.onNodeWithTag("editor-header").assertIsDisplayed()
         systemBack()
         awaitCloseDialog()
         compose.onNodeWithText("结束本次编辑？").assertIsDisplayed()
